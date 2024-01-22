@@ -15,6 +15,7 @@ from tqdm import tqdm
 from ..collection_manager import CollectionManager
 from astropy.time import Time
 from pathlib import Path
+from astropy.io import fits
 
 class HeaderCorrection():
 
@@ -349,6 +350,50 @@ class HeaderManipulation():
         """
 
         return image_collection.values(header, unique = True)
+
+    @staticmethod
+    def edit_headers_with_fitsio(image_collection, save_location = "", additional_name = None, overwrite = True, **headers_values, ):
+
+        """
+        This edits the header of multi-extension fits files since the iteration of ImageCollection doesn't work on
+        multi-extension fits files.
+
+        Parameters
+        ----------
+        image_collection
+        save_location
+        headers_values: dict; the dictionary of the headers you want to add/edit
+        additional_name: str; the additional name appending to the original file name
+
+        Returns
+        -------
+        None
+        """
+
+        file_paths = image_collection.files_filtered(include_path = True)
+
+        for file_path in file_paths:
+
+            file_path = Path(file_path)
+            if save_location != "":
+                save_location = Path(save_location)
+                if additional_name == None:
+                    save_location = save_location/file_path.name
+                else:
+                    file_name = file_path.stem + "_master" + file_path.suffix
+                    save_location = save_location/file_name
+            else:
+                if additional_name == None:
+                    save_location = file_path
+                else:
+                    file_name = file_path.stem + "_master" + file_path.suffix
+                    save_location = file_path.parent/file_name
+    
+            hdul = fits.open(file_path)
+            for key, value in headers_values.items():
+                hdul[0].header[key] = value
+            hdul.writeto(save_location, overwrite = overwrite)
+            hdul.close()
 
         
     

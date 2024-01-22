@@ -103,7 +103,7 @@ class Combine():
                 print(f"WARNING: No {object_name} found! Skipping......")
 
             elif image_number == 1:
-                print(f"Only one {object} image! Just copying and renaming the file.")
+                print(f"Only one {object_name} image! Just copying and renaming the file.")
                 
                 for hdu in collection_temp.hdus(save_with_name = "_master", save_location = save_location, overwrite = True):
                     hdu.header["IMTYPE"] = f"Master {image_type}"
@@ -111,8 +111,8 @@ class Combine():
                 
                 fname_stem = Path(image_list_to_combine[0]).stem  # get the filename stem: crab_sdss_g.fits --get--> crab_sdss_g
                 fname_suffix = Path(image_list_to_combine[0]).suffix
-                name_path = Path(save_location) / f"{fname_stem}_master.{fname_suffix}"  # the path to the saved file
-                new_name_path = name_path.with_name(f"Master_{object_name}.{fname_suffix}")  # the new path
+                name_path = Path(save_location) / f"{fname_stem}_master{fname_suffix}"  # the path to the saved file
+                new_name_path = name_path.with_name(f"Master_{object_name}{fname_suffix}")  # the new path
                 name_path.rename(new_name_path)  # rename the file, notice that you have to use the full path to rename, not just the file name
 
             elif image_number > 1:
@@ -173,7 +173,7 @@ class Combine():
     
         for object_name in object_names:
             for filter in filters:
-                # get the image collection in different filters and object names
+                # get the image collection with specific filter and object name
                 collection_temp = CollectionManager.filter_collection(collection_to_combine, **{"OBJECT": [object_name], "FILTER": [filter]})
                 image_list_to_combine = list(collection_temp.files_filtered(include_path = True)) # this is the list of the absolute path to the fits images to be combined
                 image_filenames = list(collection_temp.files_filtered()) # this is the list of file names of the images to be combined
@@ -183,22 +183,24 @@ class Combine():
                     print(f"WARNING: No {object_name} in {filter} filter found! Skipping......")
                     
                 elif image_number == 1:
-                    print(f"Only one {object} image in {filter}! Just copying and renaming the file.")
-                    
-                    for hdu in collection_temp.hdus(save_with_name = "_master", save_location = save_location, overwrite = True):
-                        hdu.header["IMTYPE"] = f"Master {image_type}"
-                        hdu.header["NCOMBINE"] = int(image_number)
-                        
-                        if image_type == "Light":  # need to update rdnoise and gain, I don't know why it's only for light images
-                            rdnoise = hdu.header["RDNOISE"]
-                            hdu.header["RDNOISE"] = rdnoise/np.sqrt(image_number)  # update the rdnoise
-                            gain = hdu.header["GAIN"]
-                            hdu.header["GAIN"] = gain*image_number  # update the gain
+                    print(f"Only one {object_name} image in {filter}! Just copying and renaming the file.")
+
+                    # construct the headers and values to write
+                    header_dict = {"IMTYPE": f"Master {image_type}", 
+                                   "NCOMBINE": int(image_number)}
+                    if image_type == "Light":
+                        header_dict["RDNOISE"] = self._telescope.ccd_rdnoise.value
+                        header_dict["GAIN"] = self._telescope.ccd_gain.value
+
+                    HeaderManipulation.edit_headers_with_fitsio(collection_temp, 
+                                                                save_location = save_location, 
+                                                                additional_name = "_master", 
+                                                                **header_dict)
                             
-                    fname_stem = Path(image_list_to_combine[0]).stem  # get the filename stem: crab_sdss_g.fits --get--> crab_sdss_g
-                    fname_suffix = Path(image_list_to_combine[0]).suffix # get the filename suffix: crab_sdss_g.fits --get--> fits
-                    name_path = Path(save_location) / f"{fname_stem}_master.{fname_suffix}"  # the path to the copied file
-                    new_name_path = name_path.with_name(f"Master_{object_name}_{filter}.{fname_suffix}")  # the new path
+                    fname_stem = Path(image_list_to_combine[0]).stem  # get the filename stem: crab_sdss_g.fits --get--> crab_sdss_g, it only contains one fits file
+                    fname_suffix = Path(image_list_to_combine[0]).suffix # get the filename suffix: crab_sdss_g.fits --get--> .fits
+                    name_path = Path(save_location) / f"{fname_stem}_master{fname_suffix}"  # the path to the copied file
+                    new_name_path = name_path.with_name(f"Master_{object_name}_{filter}{fname_suffix}")  # the new path
                     name_path.rename(new_name_path)  # rename the file, notice that you have to use the full path to rename, not just the file name
                     print("----------------------------------------------------------\n")
 
