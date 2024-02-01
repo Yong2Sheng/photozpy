@@ -21,6 +21,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import interpolate
 from astropy.io import fits
+from ccdproc import cosmicray_lacosmic as lacosmic
 
 
 class SourceDetection():
@@ -52,6 +53,7 @@ class SourceDetection():
         image_path = Path(image_path)
         ccddata = CCDData.read(image_path)
         data = ccddata.data
+        #data, mask = lacosmic(data)
         filter = ccddata.header["FILTER"]
         object = ccddata.header["OBJECT"]
         if verbose == False:
@@ -71,11 +73,11 @@ class SourceDetection():
                        show_whole_image = False, show_individual_sources = False, verbose = False):
 
         
-        # refresh the full collection
-        self._image_collection = CollectionManager.refresh_collection(self._image_collection)
+        # refresh the full collection to make sure it includes all the newly generated images (Master Light)
+        self._image_collection = CollectionManager.refresh_collection(self._image_collection, rescan = True)
 
         # Filter the image collection, only keep Master Light type
-        image_collection = CollectionManager.filter_collection(self._image_collection, **{"IMTYPE": "Master Light"})
+        image_collection = CollectionManager.filter_collection(self._image_collection, **{"IMTYPE": image_type})
 
         # get the image list to iterate through
         image_list = image_collection.files_filtered(include_path = True)
@@ -246,7 +248,8 @@ class SourceDetection():
         return data_clipped_average
 
     def find_fwhm(self, edge_radii_end = 26, edge_radii_step = 0.5, 
-                  std_clip_threshold = 3, local_peak_detection_threshold = 10, fit_box_size = 41, centroid_function = centroid_com):
+                  std_clip_threshold = 3, local_peak_detection_threshold = 10, fit_box_size = 41, centroid_function = centroid_com, 
+                  write_fwhm = False):
 
         """
         Find the averge FWHM out of the sources detected in an image collection.
@@ -260,6 +263,9 @@ class SourceDetection():
         -------
         average_fwhm: float; the averaged fwhm found from the image collection
         """
+
+        # refresh the full collection to make sure it includes all the Master Light images
+        self._image_collection = CollectionManager.refresh_collection(self._image_collection, rescan = True)
 
         fwhm_all = []
 
@@ -292,10 +298,12 @@ class SourceDetection():
         print(f"The FWHM of the image collection is {averaged_fwhm}")
         print("----------------------------------------\n")
 
-        for image_path in centroid_dictionary["image_path"]:
-            with fits.open(image_path, mode = "update") as hdul:
-                hdul[0].header["FWHM"] = averaged_fwhm
-                hdul.flush()
+        if write_fwhm == True:
+
+            for image_path in centroid_dictionary["image_path"]:
+                with fits.open(image_path, mode = "update") as hdul:
+                    hdul[0].header["FWHM"] = averaged_fwhm
+                    hdul.flush()
 
         return
 

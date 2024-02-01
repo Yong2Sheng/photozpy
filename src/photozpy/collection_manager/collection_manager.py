@@ -12,11 +12,7 @@ from ccdproc import ImageFileCollection
 from pathlib import Path
 from itertools import product
 import copy
-import matplotlib.pyplot as plt
-import matplotlib
-from astropy.visualization import astropy_mpl_style, simple_norm
-from astropy.io import fits
-from matplotlib.colors import LogNorm
+from ..convenience_functions import *
 from tqdm import tqdm
 
 class CollectionManager():
@@ -99,6 +95,9 @@ class CollectionManager():
         new_image_collection
         """
 
+        # refresh the full collection --> I should NOT refresh the image collection!
+        #image_collection = CollectionManager.refresh_collection(image_collection, rescan = True)
+
         dict_list = CollectionManager.unwarp_dictionary(headers_values)
     
         files = []
@@ -141,63 +140,41 @@ class CollectionManager():
         new_image_collection = ImageFileCollection(location = Path(image_collection.location), filenames = file_names)
 
         return new_image_collection
-
+        
     @staticmethod
-    def _plot_fits_image(fits_path):
+    def plot_collection(image_collection, save_location = None, norm_percent = 99.9, **headers_values):
+
         """
-        Plot a fits image.
+        Plot the fits images in an image collection. The image collection can be filtered before plotting.
 
         Parameters
         ----------
-        path: str or pathlib.Path; the path to the image.
+        image_collection : NoneType or ccdproc.ImageFileCollection
+            The image collection to be plotted. 
+        save_location : NoneType, str or pathlib.Path
+            The path to save the plotted fits images.
+        headers_values : dict
+            The headers and corresponding values to filter the image collection before plotting.
 
         Returns
         -------
         None
         """
 
-        plt.style.use(astropy_mpl_style)
-        matplotlib.use('Agg')
+        collection_to_plot = CollectionManager.refresh_collection(image_collection, rescan = True)
+        if headers_values is not {}:
+            collection_to_plot = CollectionManager.filter_collection(collection_to_plot, **headers_values)
+        fits_path_to_plot = list(collection_to_plot.files_filtered(include_path = True))
+
+        for fits_path in tqdm(fits_path_to_plot):
+            plot_image(fits_path = fits_path)
+
+        return 
+
+
         
-        fits_path = Path(fits_path)  # path of fits file
-        image_name = fits_path.stem + ".png"
-        image_path = fits_path.parent/image_name
+
         
-        fits_data = fits.getdata(fits_path, ext=0)
-        norm = simple_norm(fits_data, 'log', percent= 99.9)
-        plt.figure()
-        plt.imshow(fits_data, cmap='gray', norm=norm)
-        plt.colorbar()
-        plt.savefig(image_path, dpi=300)
-        plt.clf()
-        plt.close("all")
-
-    def plot_collection(image_collection, headers_values = None):
-
-        """
-        Plot the fits images in the image_collection. The image collection can be filtered.
-
-        Parameters
-        ----------
-        image_collection: ccdproc.ImageFileCollection; the image collection you want to plot
-        headers_values: dict; the header names and corresponding values. The values should be in list.
-                              {"header": ["value"]} and the list can contain multiple values.
-
-        returns
-        -------
-        collection_to_plot: ccdproc.ImageFileCollection; the image collection you plot
-        """
-
-        if headers_values != None:
-            collection_to_plot = CollectionManager.filter_collection(image_collection, **headers_values)
-        else:
-            collection_to_plot = image_collection
-
-        image_path_to_combine = list(collection_to_plot.files_filtered(include_path = True))
-        for i in tqdm(image_path_to_combine):
-            CollectionManager._plot_fits_image(i)
-
-        return collection_to_plot
 
         
 

@@ -30,6 +30,7 @@ class PlateSolving():
         image_list = image_collection.files_filtered(include_path=True)
         
         for image in image_list:
+            print(f"Adding WCS to {image}")
             if fwhm == None:
                 # try to read the fwhm from the header
                 with fits.open(image) as hdul:
@@ -44,7 +45,6 @@ class PlateSolving():
                 for card in plate_solved_wcs_header.cards:
                     hdul[0].header[card[0]] = (card[1], "UPDATED!!")
                 hdul.flush()
-
-            print(f"WCS added to {image_file}")
+            print("-----------------------------------------------------------------------------------\n")
 
         return

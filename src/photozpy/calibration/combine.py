@@ -79,7 +79,7 @@ class Combine():
         """
         
         # refresh the full collection
-        self._image_collection = CollectionManager.refresh_collection(self._image_collection)
+        self._image_collection = CollectionManager.refresh_collection(self._image_collection, rescan = True)
 
         if save_location == "":
             save_location = self._image_collection.location

@@ -16,6 +16,7 @@ from pathlib import Path
 from astropy.io import fits
 import copy
 from astroalign import register
+from ccdproc import cosmicray_lacosmic as lacosmic
 
 class Registration():
 
@@ -27,7 +28,7 @@ class Registration():
 
 
     @staticmethod
-    def _Register_images(image_collection, filter):
+    def _Register_images(image_collection, filter, min_area=5, detection_sigma=5):
 
         """
         Register all the images with same object in the collection.
@@ -58,10 +59,13 @@ class Registration():
         print(f"Aligning {object_name} ......")
 
         # get the image collection that only contains the reference image
-        # Here I use the g filter particularly becasue it is more sensitive
         reference_collection = CollectionManager.filter_collection(image_collection, **{"FILTER": filter})
         reference_image_path = Path(reference_collection.files_filtered(include_path = True)[0])
         refernece_image_name = reference_image_path.name
+        
+        reference_ext0 = fits.getdata(reference_image_path, ext=0)
+        reference_data = reference_ext0.byteswap().newbyteorder()
+        #reference_data, mask = lacosmic(reference_data)
 
         # get the image collection to be registered by removing the one used to register
         register_collection = CollectionManager.delete_images(image_collection, refernece_image_name)
@@ -75,11 +79,13 @@ class Registration():
             target_ext0 = fits.getdata(i, ext = 0)
             header_target = fits.getheader(i)
             target_data = target_ext0.byteswap().newbyteorder()
+            #target_data, mask = lacosmic(target_data)
 
-            reference_ext0 = fits.getdata(reference_image_path, ext=0)
-            reference_data = reference_ext0.byteswap().newbyteorder()
+            # reference_ext0 = fits.getdata(reference_image_path, ext=0)
+            # reference_data = reference_ext0.byteswap().newbyteorder()
+            # reference_data, mask = lacosmic(reference_data)
             
-            img_aligned, footprint = register(target_data, reference_data)
+            img_aligned, footprint = register(target_data, reference_data, min_area=min_area, detection_sigma=detection_sigma)
 
             header_target["ALIGN"] = "Registered"
             hdu = fits.PrimaryHDU(img_aligned, header_target)
@@ -96,7 +102,7 @@ class Registration():
 
         return
 
-    def Register_images(self, filter):
+    def Register_images(self, filter, min_area=5, detection_sigma=5):
 
         """
         Register all the images with different objects in the collection.
@@ -117,7 +123,7 @@ class Registration():
         # get all the Light type images
         images_collection_to_register = CollectionManager.filter_collection(self._image_collection, **{"IMTYPE": "Light"})
 
-        # get the object names
+        # get the object names, repeated names are removed.
         object_names = HeaderManipulation.get_header_values(images_collection_to_register, header = "object")
 
         for object_name in object_names:
@@ -126,7 +132,7 @@ class Registration():
             to_register = CollectionManager.filter_collection(images_collection_to_register, **{"OBJECT": object_name})
 
             # register the images of same object
-            Registration._Register_images(to_register, filter = filter)
+            Registration._Register_images(to_register, filter = filter, min_area = min_area, detection_sigma=detection_sigma)
 
         # refresh the full collection
         self._image_collection = CollectionManager.refresh_collection(self._image_collection)

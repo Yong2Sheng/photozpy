@@ -1,236 +1,213 @@
-from astropy import visualization as aviz
-from astropy.nddata.blocks import block_reduce
-from astropy.nddata.utils import Cutout2D
-from matplotlib import pyplot as plt
+from pathlib import Path
+import matplotlib.pyplot as plt
+import matplotlib
+from astropy.visualization import astropy_mpl_style, simple_norm
+from astropy.io import fits
+import numpy as np
+from astropy.nddata import CCDData
+from astropy import units as u
+import os
 
 
-def show_image(image,
-               percl=99, percu=None, is_mask=False,
-               figsize=(10, 10),
-               cmap='viridis', log=False, clip=True,
-               show_colorbar=True, show_ticks=True,
-               fig=None, ax=None, input_ratio=None):
+def convert_coords(image_path = None, wcs = None, skycoords = None, pixelcoords = None, verbose = False):
+
     """
-    Show an image in matplotlib with some basic astronomically-appropriat stretching.
+    Takes a fits file or the astropy.wcs.WCS object as input. 
+    Convert the sky coordinates to the pixel coordinates or vice versa.
 
     Parameters
     ----------
-    image
-        The image to show
-    percl : number
-        The percentile for the lower edge of the stretch (or both edges if ``percu`` is None)
-    percu : number or None
-        The percentile for the upper edge of the stretch (or None to use ``percl`` for both)
-    figsize : 2-tuple
-        The size of the matplotlib figure in inches
+    file: str or path.Path object; the path to the object
+    wcs: the astropy.wcs.WCS object. If both were input, wcs will cover the file.
+    skycoords: astropy.Skycoord object. The sky coordinate of the object
+    pixelcoords: 2D numpy array; the pixel coordinate of the object, the first column is the x pixels and the second is the y pixels: [[x pixles],[y pixels]]
+
+    Returns
+    -------
+    astropy.Skycoords or list
     """
-    if percu is None:
-        percu = percl
-        percl = 100 - percl
 
-    if (fig is None and ax is not None) or (fig is not None and ax is None):
-        raise ValueError('Must provide both "fig" and "ax" '
-                         'if you provide one of them')
-    elif fig is None and ax is None:
-        if figsize is not None:
-            # Rescale the fig size to match the image dimensions, roughly
-            image_aspect_ratio = image.shape[0] / image.shape[1]
-            figsize = (max(figsize) * image_aspect_ratio, max(figsize))
+    # check if the number of input satistifies the calculation
 
-        fig, ax = plt.subplots(1, 1, figsize=figsize)
+    if image_path == None and wcs == None:
+        raise TypeError("You must give a file path or asrtropy.wcs.WCS obkect as the input!")
 
+    if skycoords == None and pixelcoords == None:
+        raise TypeError("You must give sky coordinates or pixel coordinates as the input!")
 
-    # To preserve details we should *really* downsample correctly and
-    # not rely on matplotlib to do it correctly for us (it won't).
+    elif skycoords != None and pixelcoords != None:
+        raise TypeError("Please only input the sky coordinates or the pixel coordinates!")
 
-    # So, calculate the size of the figure in pixels, block_reduce to
-    # roughly that,and display the block reduced image.
-
-    # Thanks, https://stackoverflow.com/questions/29702424/how-to-get-matplotlib-figure-size
-    fig_size_pix = fig.get_size_inches() * fig.dpi
-
-    ratio = (image.shape // fig_size_pix).max()
-
-    if ratio < 1:
-        ratio = 1
-
-    ratio = input_ratio or ratio
-
-    reduced_data = block_reduce(image, ratio)
-
-    if not is_mask:
-        # Divide by the square of the ratio to keep the flux the same in the
-        # reduced image. We do *not* want to do this for images which are
-        # masks, since their values should be zero or one.
-         reduced_data = reduced_data / ratio**2
-
-    # Of course, now that we have downsampled, the axis limits are changed to
-    # match the smaller image size. Setting the extent will do the trick to
-    # change the axis display back to showing the actual extent of the image.
-    extent = [0, image.shape[1], 0, image.shape[0]]
-
-    if log:
-        stretch = aviz.LogStretch()
+    # Read the file and get the wcs object
+    if wcs != None:
+        wcs_object = wcs
     else:
-        stretch = aviz.LinearStretch()
+        data = CCDData.read(image_path, unit = "adu")
+        wcs_object = data.wcs
 
-    norm = aviz.ImageNormalize(reduced_data,
-                               interval=aviz.AsymmetricPercentileInterval(percl, percu),
-                               stretch=stretch, clip=clip)
+    if skycoords != None and pixelcoords == None:
+        pixelcoords = wcs_object.world_to_pixel(skycoords)
+        pixelcoords = np.array((pixelcoords)).T # transfer the array so it's ra/dec in each column
+        out = pixelcoords # output variable
+        if verbose == True:
+            print("Conversion from sky coordiantes to pixel coordinates completed!")
 
-    if is_mask:
-        # The image is a mask in which pixels should be zero or one.
-        # block_reduce may have changed some of the values, so reset here.
-        reduced_data = reduced_data > 0
-        # Set the image scale limits appropriately.
-        scale_args = dict(vmin=0, vmax=1)
-    else:
-        scale_args = dict(norm=norm)
+    elif skycoords == None and pixelcoords != None:
+        xpixel_coords = pixelcoords[0]
+        ypixel_coords = pixelcoords[1]
+        radec = wcs_object.pixel_to_world(xpixel_coords, ypixel_coords)
+        out = radec
+        if verbose == True:
+            print("Conversion from pixel coordinates to sky coordinates completed!")
 
-    im = ax.imshow(reduced_data, origin='lower',
-                   cmap=cmap, extent=extent, aspect='equal', **scale_args)
-
-    if show_colorbar:
-        # I haven't a clue why the fraction and pad arguments below work to make
-        # the colorbar the same height as the image, but they do....unless the image
-        # is wider than it is tall. Sticking with this for now anyway...
-        # Thanks: https://stackoverflow.com/a/26720422/3486425
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        # In case someone in the future wants to improve this:
-        # https://joseph-long.com/writing/colorbars/
-        # https://stackoverflow.com/a/33505522/3486425
-        # https://matplotlib.org/mpl_toolkits/axes_grid/users/overview.html#colorbar-whose-height-or-width-in-sync-with-the-master-axes
-
-    if not show_ticks:
-        ax.tick_params(labelbottom=False, labelleft=False, labelright=False, labeltop=False)
+    return out
 
 
-def image_snippet(image, center, width=50, axis=None, fig=None,
-                  is_mask=False, pad_black=False, **kwargs):
+def plot_image(fits_path = None,
+               ccd_data = None, 
+               save_location = None,
+               skycoords = None, 
+               pixelcoords = None, 
+               circular_apertures = None, 
+               annulus_apertures = None,
+               adjust_fov = True,
+               norm_percent = 99.9,
+               fname_append = False):
+
     """
-    Display a subsection of an image about a center.
+    Plot a image with skycoord marks and apertures.
 
     Parameters
     ----------
+    image_path : str or pathlib.Path
+        The path to 
+    skycoords : NoneType or astropy.coordinates.SkyCoord, optional
+        The sky coordinates to the plotted (the default is None, which implies no sky coordinates will be plotted).
+    pixelcoords : NoneType or np.ndarray, optional
+        The pixel coordinates to the plotted (the default is None, which implies no pixel coordinates will be plotted).
+    circular_apertures : NoneType or photutils.aperture.CircularAnnulus, optional
+        The circular apertures to be plotted (the default is None, which implies no circular apertures will be plotted).
+    annulus_apertures : NoneType or photutils.aperture.CircularAperture, optional
+        The annulus apertures to be plotted (the default is None, which implies no annulus apertures will be plotted)
+    adjust_fov : bool, default=True
+        When full_fov is True, the fov will be adjusted to cut off the unrelated regions to emphasize the sky coordinates and apertures.
 
-    image : numpy array
-        The full image from which a section is to be taken.
-
-    center : list-like
-        The location of the center of the cutout.
-
-    width : int, optional
-        Width of the cutout, in pixels.
-
-    axis : matplotlib.Axes instance, optional
-        Axis on which the image should be displayed.
-
-    fig : matplotlib.Figure, optional
-        Figure on which the image should be displayed.
-
-    is_mask : bool, optional
-        Set to ``True`` if the image is a mask, i.e. all values are
-        either zero or one.
-
-    pad_black : bool, optional
-        If ``True``, pad edges of the image with zeros to fill out width
-        if the slice is near the edge.
+    Returns
+    -------
+    None
     """
-    if pad_black:
-        sub_image = Cutout2D(image, center, width, mode='partial', fill_value=0)
+
+    plt.style.use(astropy_mpl_style)
+    matplotlib.use('Agg')
+
+    # initiate the array of centers
+    centers_all = np.array([[0 ,0]])  # [0,0] is just used to initiate a 2d array
+    
+    if fits_path != None:
+        # Get file names
+        fits_path = Path(fits_path)  # path of image file
+        if fname_append:
+            image_name = fits_path.stem + f"{fname_append}" + ".png"
+        else:
+            image_name = fits_path.stem + ".png"
+        if save_location == None:
+            image_path = fits_path.parent/image_name
+        else:
+            image_path = Path(save_location)/image_name
+    
+        # Read fits data
+        fits_data = fits.getdata(fits_path, ext=0)
+
+    elif ccd_data != None:
+        fits_data = ccd_data.data
+        if fname_append:
+            image_name = ccd_data.header["OBJECT"] + "_" + ccd_data.header["FILTER"] + fname_append + ".png"
+        else:
+            image_name = ccd_data.header["OBJECT"] + "_" + ccd_data.header["FILTER"] + fname_append + ".png"
+        if save_location == None:
+            image_path = Path(os.getcwd())/image_name
+        else:
+            image_path = Path(save_location)/image_name
     else:
-        # Return a smaller subimage if extent goes out side image
-        sub_image = Cutout2D(image, center, width, mode='trim')
-    show_image(sub_image.data, cmap='gray', ax=axis, fig=fig,
-               show_colorbar=False, show_ticks=False, is_mask=is_mask,
-               **kwargs)
+        raise ValueError("You must provide either fits file path or CCDData!")
 
+    norm = simple_norm(fits_data, 'log', percent= norm_percent) # define stretched norm
+    
+    # Plot the image
+    plt.figure()
+    plt.imshow(fits_data, norm=norm, cmap='gray')
+    plt.colorbar()
 
-def _mid(sl):
-    return (sl.start + sl.stop) // 2
+    # Plot the pixel coordinates converted from sky coordinates
+    if skycoords != None:
+        # convert sky coordinates to pixel coordinates
+        pixelcoords_from_skycoords = convert_coords(fits_path, skycoords = skycoords)
+        centers_all = np.concatenate((centers_all, pixelcoords_from_skycoords), axis=0)
+        
+        plt.scatter(pixelcoords_from_skycoords[:,0], pixelcoords_from_skycoords[:,1], marker = "*", s=5, color = "lime", label = "True Coordinates")
+        
+        for row_idx in np.arange(skycoords.shape[0]):
+            x_ = pixelcoords_from_skycoords[row_idx][0]
+            y_ = pixelcoords_from_skycoords[row_idx][1]
+            ra = skycoords[row_idx].ra.to_string(unit=u.hourangle, sep=':')
+            dec = skycoords[row_idx].dec.to_string(unit=u.degree, sep=':')
+            plt.annotate(f"RA={ra}, Dec={dec}", (x_, y_), color = "lime", size = 10)
+            
+    if isinstance(pixelcoords, np.ndarray):
+        centers_all = np.concatenate((centers_all, pixelcoords), axis=0)
+        plt.scatter(pixelcoords[:,0], pixelcoords[:,1], marker = "*", s=5, color = "lime", label = "True Coordinates")
+        for row_idx in np.arange(pixelcoords.shape[0]):
+            x_ = pixelcoords[row_idx][0]
+            y_ = pixelcoords[row_idx][1]
+            plt.annotate(f"x={x_}, y={y_}", (x_, y_), color = "lime", size = 10)
 
+    if circular_apertures != None:
+        centers_all = np.concatenate((centers_all, circular_apertures.positions), axis=0)
+        ap_patches = circular_apertures.plot(color='orange', lw=1, label='Photometry aperture')
+        circular_centers = circular_apertures.positions
+        # plot the centers
+        for row_idx in np.arange(circular_centers.shape[0]):
+            x_ = circular_centers[row_idx][0]
+            y_ = circular_centers[row_idx][1]
+            plt.scatter(x_, y_, marker = "x", s=5, color = "orange")
+            #plt.annoate(f"x={x_}, y={y_}", (x_, y_))
 
-def display_cosmic_rays(cosmic_rays, images, titles=None,
-                        only_display_rays=None):
-    """
-    Display cutouts of the region around each cosmic ray and the other images
-    passed in.
+    if annulus_apertures != None:
+        ann_patches = annulus_apertures.plot(color='red', lw=1, label='Background annulus')
 
-    Parameters
-    ----------
-
-    cosmic_rays : photutils.segmentation.SegmentationImage
-        The segmented cosmic ray image returned by ``photuils.detect_source``.
-
-    images : list of images
-        The list of images to be displayed. Each image becomes a column in
-        the generated plot. The first image must be the cosmic ray mask.
-
-    titles : list of str
-        Titles to be put above the first row of images.
-
-    only_display_rays : list of int, optional
-        The number of the cosmic ray(s) to display. The default value,
-        ``None``, means display them all. The number of the cosmic ray is
-        its index in ``cosmic_rays``, which is also the number displayed
-        on the mask.
-    """
-    # Check whether the first image is actually a mask.
-
-    if not ((images[0] == 0) | (images[0] == 1)).all():
-        raise ValueError('The first image must be a mask with '
-                         'values of zero or one')
-
-    if only_display_rays is None:
-        n_rows = len(cosmic_rays.slices)
+    # Determine the final size of image (xlim and ylim)
+    if skycoords == None and pixelcoords == None and circular_apertures == None and annulus_apertures == None:
+        plt.savefig(image_path, dpi=300)
+        plt.clf()
+        plt.close("all")
+    elif adjust_fov == False:
+        plt.savefig(image_path, dpi=300)
+        plt.clf()
+        plt.close("all")
     else:
-        n_rows = len(only_display_rays)
+        data_xmax = fits_data.shape[0]
+        data_ymax = fits_data.shape[1]
 
-    n_columns = len(images)
+        # get plotting range of x
+        xmin = centers_all[1:,0].min() - 100  # need to exlude the first row of [0,0]
+        if xmin < 0:
+            xmin = 0
+        xmax = centers_all[1:,0].max() + 100
+        if xmax > data_xmax:
+            xmax = data_xmax
 
-    width = 12
+        # get plotting range of y
+        ymin = centers_all[1:,1].min() - 100
+        if ymin < 0:
+            ymin = 0
+        ymax = centers_all[1:,1].max() + 100
+        if ymax > data_ymax:
+            ymax = data_ymax
 
-    # The height below is *CRITICAL*. If the aspect ratio of the figure as
-    # a whole does not allow for square plots then one ends up with a bunch
-    # of whitespace. The plots here are square by design.
-    height = width / n_columns * n_rows
-    fig, axes = plt.subplots(n_rows, n_columns, sharex=False, sharey='row',
-                             figsize=(width, height))
+        plt.xlim(xmin, xmax)
+        plt.ylim(ymax, ymin)
+        plt.savefig(image_path, dpi=300)
+        plt.clf()
+        plt.close("all")
 
-    # Generate empty titles if none were provided.
-    if titles is None:
-        titles = [''] * n_columns
-
-    display_row = 0
-
-    for row, s in enumerate(cosmic_rays.slices):
-        if only_display_rays is not None:
-            if row not in only_display_rays:
-                # We are not supposed to display this one, so skip it.
-                continue
-
-        x = _mid(s[1])
-        y = _mid(s[0])
-
-        for column, plot_info in enumerate(zip(images, titles)):
-            image = plot_info[0]
-            title = plot_info[1]
-            is_mask = column == 0
-            ax = axes[display_row, column]
-            image_snippet(image, (x, y), width=80, axis=ax, fig=fig,
-                          is_mask=is_mask)
-            if is_mask:
-                ax.annotate('Cosmic ray {}'.format(row), (0.1, 0.9),
-                            xycoords='axes fraction',
-                            color='cyan', fontsize=20)
-
-            if display_row == 0:
-                # Only set the title if it isn't empty.
-                if title:
-                    ax.set_title(title)
-
-        display_row = display_row + 1
-
-    # This choice results in the images close to each other but with
-    # a small gap.
-    plt.subplots_adjust(wspace=0.1, hspace=0.05)
+    return
