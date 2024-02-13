@@ -38,7 +38,7 @@ class PlateSolving():
             image_file = Path(image).name
             ast = AstrometryNet()
             ast.api_key = api
-            wcs_header = ast.solve_from_image(image, fwhm = fwhm, detect_threshold=detect_threshold, verbose = False)
+            wcs_header = ast.solve_from_image(image, fwhm = fwhm, detect_threshold=detect_threshold)#, verbose = False)
             plate_solved_wcs_header = WCS(wcs_header).to_header()
             
             with fits.open(image, mode = "update") as hdul:

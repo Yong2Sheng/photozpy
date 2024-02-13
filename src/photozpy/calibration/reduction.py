@@ -176,8 +176,13 @@ class Reduction():
         # refresh the full collection
         self._image_collection = CollectionManager.refresh_collection(self._image_collection, rescan = True)
 
+        # get the filters used in the light images
+        light_image_collection = CollectionManager.filter_collection(self._image_collection, **{"IMTYPE": ["Light"]})
+        # flat or light IMTYPE has filters, get the filters used in the collection
+        filters = CollectionManager.get_header_values(light_image_collection, "FILTER", unique = True)
+
         # let's loop by filters first
-        for filter in self._telescope.filters:
+        for filter in filters:
             
             master_flat_collection = CollectionManager.filter_collection(self._image_collection, **{"IMTYPE": ["Master Flat"], "FILTER": [filter]})
             if len(master_flat_collection.files) != 1:

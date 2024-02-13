@@ -160,12 +160,12 @@ class Combine():
 
         if save_location == "":
             save_location = self._image_collection.location
-
-        # flat or light IMTYPE has filters
-        filters = self._telescope.filters
             
         # first select image types (Flat or Light)
         collection_to_combine = CollectionManager.filter_collection(self._image_collection, **{"IMTYPE": [image_type]})
+
+        # flat or light IMTYPE has filters, get the filters used in the collection
+        filters = CollectionManager.get_header_values(collection_to_combine, "FILTER", unique = True)
 
         # Get the object names (Flat or various target names)
         object_names = HeaderManipulation.get_header_values(collection_to_combine, header = "object")  # It seems only the lower cases work

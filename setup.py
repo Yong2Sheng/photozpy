@@ -25,7 +25,8 @@ setup(
         "photutils",
         "astroalign",
         "scipy",
-        "matplotlib"
+        "matplotlib",
+        "astroquery"
         ]
 
 )

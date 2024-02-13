@@ -14,6 +14,7 @@ from itertools import product
 import copy
 from ..convenience_functions import *
 from tqdm import tqdm
+from astropy.io import fits
 
 class CollectionManager():
 
@@ -38,7 +39,7 @@ class CollectionManager():
 
         if rescan == False:
             new_image_collection = ImageFileCollection(location = Path(image_collection.location), 
-                                                   filenames = image_collection.files)
+                                                       filenames = image_collection.files)
         elif rescan == True:
             new_image_collection = ImageFileCollection(location = Path(image_collection.location), 
                                                        glob_include = "*.fits")
@@ -171,6 +172,31 @@ class CollectionManager():
 
         return 
 
+    @staticmethod
+    def get_header_values(image_collection, headers, unique = True):
+
+        """
+        Get the header valus from the image collection. I wrote this because the ImageFileCollection.values() doesn't work!
+
+        """
+
+        if isinstance(headers, str):
+            headers = [headers]
+
+        file_paths = image_collection.files_filtered(include_path = True)
+
+        values_list = []
+        for file_path in file_paths:
+            header_all = fits.getheader(file_path)
+            for header in headers:
+                value_ = header_all[header]
+                values_list.append(value_)
+
+        if unique:
+            values_list = [*set(values_list)]
+
+        return values_list
+            
 
         
 
