@@ -52,7 +52,7 @@ class HeaderCorrection():
         return
 
 
-    def correct_filter_headers(self, input_collection = None, overwrite = True, save_location = "", **filter_dict):
+    def correct_filter_headers(self, input_collection = None, overwrite = True, save_location = "", from_file_name = False, **filter_dict):
         """
         Correct the filter names to standard ones for future analysis"
 
@@ -83,9 +83,12 @@ class HeaderCorrection():
         # note that although it only works on flat and light image, it will eventually return a image collection
         # that contains all the original files in the input_collection
 
-        for hdu in tqdm(fl_collection.hdus(overwrite = overwrite, save_location = save_location)):
-            old_filter = hdu.header["FILTER"]
-            name = hdu.header["OBJECT"]
+        for hdu, file_name in tqdm(fl_collection.hdus(overwrite = overwrite, save_location = save_location, return_fname = True)):
+            if from_file_name == False:
+                old_filter = hdu.header["FILTER"]
+                name = hdu.header["OBJECT"]
+            else:
+                old_filter = file_name  # if the fits file has no value for the FILTER header, it will use the file name as the filter name since the file name contains the filter name as well.
             if old_filter in self._telescope.filters:
                 pass
             else:
@@ -324,7 +327,7 @@ class HeaderManipulation():
         else:
             mappers = filter_dict
             
-        mapped_filters = [value for key,value in mappers.items() if name in key]
+        mapped_filters = [value for key,value in mappers.items() if key in name]
         mapped_filters = [*set(mapped_filters)] # remove the duplicated filter names
         
         if len(mapped_filters) == 0:
