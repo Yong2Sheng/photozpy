@@ -225,7 +225,8 @@ class SourceDetection():
     def get_mad_clipped_average(data, mad_sigma = 3):
 
         """
-        Get the mad clipped average of the input data
+        Get the mad clipped average of the input data.
+        Note: This can fail the calculating the fwhm of the night be returning a value of zero for mad = median_absolute_deviation(data.flatten())
 
         Parameters
         ----------
@@ -238,7 +239,7 @@ class SourceDetection():
         """
 
         median = np.median(data.flatten())
-        mad = median_absolute_deviation(data.flatten())
+        mad = median_absolute_deviation(data.flatten())  # this can be zero, which fails the calculation of boolean1 and boolean2
         boolean1 = (data - median)/mad < mad_sigma
         boolean2 = (data - median)/mad > -mad_sigma
         boolean = boolean1*boolean2
@@ -294,8 +295,10 @@ class SourceDetection():
 
         fwhm_all = np.array(fwhm_all)
         fwhm_all = fwhm_all[fwhm_all<99]  # remove the failed FWHM fits
-        averaged_fwhm = SourceDetection.get_mad_clipped_average(fwhm_all)
-        print(f"The FWHM of the image collection is {averaged_fwhm}")
+        averaged_fwhm, median_fwhm, stddev_fwhm = sigma_clipped_stats(fwhm_all, sigma=3, maxiters=10)  # 
+        print(f"The FWHMs of the image collection are:")
+        print(f"{fwhm_all}")
+        print(f"The FWHM of the night is {averaged_fwhm}.")
         print("----------------------------------------\n")
 
         if write_fwhm == True:

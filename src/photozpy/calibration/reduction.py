@@ -149,7 +149,9 @@ class Reduction():
             with fits.open(i, mode = "update") as hdul:
                 hdul[0].header["DARKCORR"] = "Yes"
                 hdul.flush()
-
+                
+        print("Dark Correction completed!")
+        print("----------------------------------------\n")
         return
 
     def apply_flat_correction(self, save_location = ""):
