@@ -7,6 +7,50 @@ import numpy as np
 from astropy.nddata import CCDData
 from astropy import units as u
 import os
+from pathlib import Path
+import shutil
+
+def create_folder(folder_dir):
+    """
+    Check if the folder exists and create the folder if not.
+
+    Parameters
+    ----------
+    folder_path : str
+        The path of the folder you want to create.
+
+    Returns
+    -------
+    path_exist : boolean
+        False if the folder_path doesn't exist;
+        True if the folder_path already exist.
+    """
+
+    if os.path.isdir(folder_dir) != True:
+        os.mkdir(folder_dir)
+        path_exist = False
+    else:
+        path_exist = True
+        
+    return path_exist
+
+def del_then_create_folder(folder_dir):
+    """
+    Delete folder if exists and then create the folder.
+
+    Parameters
+    ----------
+    folder_dir : pathlib.path or str
+        The directory of the folder
+    """
+
+    folder_dir = Path(folder_dir)
+    
+    if folder_dir.exists():
+        shutil.rmtree(folder_dir)
+    folder_dir.mkdir()
+    
+    return folder_dir
 
 
 def convert_coords(image_path = None, wcs = None, skycoords = None, pixelcoords = None, verbose = False):
