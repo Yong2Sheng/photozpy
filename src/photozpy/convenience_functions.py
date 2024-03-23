@@ -9,6 +9,31 @@ from astropy import units as u
 import os
 from pathlib import Path
 import shutil
+import gzip
+
+def ungz_file(file_path, out_dir = None):
+
+    """
+    Ungz file and change the extension from img to fits.
+
+    Paremeters
+    ----------
+    file_path : str or pathlib.Path
+        The dir of the file to be 
+    """
+
+    gz_path = file_path
+    ungzed_path = gz_path.with_suffix("").with_suffix(".fits")
+
+    if out_dir is not None:
+        ungzed_path = out_dir / ungzed_path.name
+
+    gz_file = gzip.GzipFile(gz_path)
+    open(ungzed_path, "wb+").write(gz_file.read())
+    gz_file.close()
+
+    return
+
 
 def create_folder(folder_dir):
     """

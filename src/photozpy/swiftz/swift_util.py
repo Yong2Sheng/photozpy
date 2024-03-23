@@ -14,7 +14,8 @@ from swifttools.swift_too import Data, ObsQuery, TOORequests
 import pandas as pd
 import numpy as np
 import copy
-from ..convenience_functions import create_folder, del_then_create_folder
+from ..convenience_functions import create_folder, del_then_create_folder, ungz_file
+import shutil 
 
 class SwiftDownload():
 
@@ -238,7 +239,7 @@ class SwiftDownload():
 
         for i in np.arange(target_num):
             target_info = SwiftDownload.slice_dict(input_dict = self.obsquery_info, slice_index = int(i), remove_keys = ["window_lower", "window_upper"])
-            target_name = target_info["name"][0]
+            target_name = target_info["name"][0]  # use [0] here because the values for each key is always a list event if there is only one element.
 
             oq = ObsQuery(radius = radius, 
                           begin = self.obsquery_info["window_lower"][i], end = self.obsquery_info["window_upper"][i], 
@@ -261,18 +262,14 @@ class SwiftDownload():
                     else:
                         print(f"{oq[i].obsid} uvod mode {oq[i].uvot_mode} is not the one you requested as {uvotmode}, skipping ...")
                         id_ = oq[i].obsid
-    
-    def _organize_files(self):
 
-        """
-        Organize the downloaded files. It won't include the files that are already there:
-        - unzip the files;
-        - change the file extension to fit so they can be recognized by `mImageFileCollection`;
-        - move the image files to the source folder.
-
-        It will also create a dictionary containing both the target name, coordinates, target id and observation id(s).
-        """
-
-        for source_name in self.obsquery_info["name"]:
+        
+        source_names = self.obsquery_info["name"]
+        for source_name in source_names:
             src_dir = self.download_dir / source_name
-            #obs_id = 
+            files = list(src_dir.rglob('*sk*'))
+            for file in files:
+                ungz_file(file_path = file, out_dir = src_dir)
+
+        return
+                
