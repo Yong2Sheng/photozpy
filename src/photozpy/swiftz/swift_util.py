@@ -32,33 +32,43 @@ class SwiftDownload():
         self.download_dir = Path(download_dir)
 
 
-    def _standardize_obsquery_input(self, **kwargs):
+    def _standardize_obsquery_input(self, source_dict):
         
         """
         Standardize the obsquery input for this class.
         This function prioritizes the obsquery input in this order: obsid, targetid, and skycoord while the windows (`yyyy-mm-dd`) are always there.
+
+        Parameters
+        ----------
+        source_dict : dict
+            The dictionary contains the source information
+
+        Returns
+        -------
+        dict
+            The dictionary that can be used to query and download data.
         """
 
-        if "obsid" in kwargs.keys():
-            return {"name":kwargs["name"],
-                    "obsid": kwargs["obsid"],
-                    "window_lower": kwargs["window_lower"],
-                    "window_upper": kwargs["window_upper"]}
+        if "obsid" in source_dict.keys():
+            return {"name":source_dict["name"],
+                    "obsid": source_dict["obsid"],
+                    "window_lower": source_dict["window_lower"],
+                    "window_upper": source_dict["window_upper"]}
             
-        elif "targetid" in kwargs.keys():
-            return {"name":kwargs["name"],
-                    "targetid": kwargs["targetid"],
-                    "window_lower": kwargs["window_lower"],
-                    "window_upper": kwargs["window_upper"]}
+        elif "targetid" in source_dict.keys():
+            return {"name":source_dict["name"],
+                    "targetid": source_dict["targetid"],
+                    "window_lower": source_dict["window_lower"],
+                    "window_upper": source_dict["window_upper"]}
 
-        elif "ra" and "dec" in kwargs.keys():
-            ra_dec = {key: value for key, value in kwargs.items() if key in {"ra", "dec"}}
-            skycoord = SkyCoord(**ra_dec, unit = (u.hourangle, u.deg), frame = "icrs")
+        elif "ra" and "dec" in source_dict.keys():
+            ra_dec = {key: value for key, value in source_dict.items() if key in {"ra", "dec"}}
+            skycoord = SkyCoord(**ra_dec, unit = (u.deg, u.deg), frame = "icrs")
             
-            return {"name":kwargs["name"],
+            return {"name":source_dict["name"],
                     "skycoord": skycoord,
-                    "window_lower": kwargs["window_lower"],
-                    "window_upper": kwargs["window_upper"]}
+                    "window_lower": source_dict["window_lower"],
+                    "window_upper": source_dict["window_upper"]}
 
     def set_obsquery_info(self, source_dict):
 
@@ -75,10 +85,12 @@ class SwiftDownload():
         Returns
         -------
         dict
-            The query dictionary that will be used to download the data.
+            The query dictionary that will be used to query and download the data.
         """
 
-        self.obsquery_info = self._standardize_obsquery_input(**source_dict)
+        self.obsquery_info = self._standardize_obsquery_input(source_dict)
+
+        self.master_info = pd.DataFrame.from_dict(self.obsquery_info)
 
         return self.obsquery_info
 
@@ -97,13 +109,13 @@ class SwiftDownload():
         Returns
         -------
         dict
-            The query dictionary that will be used to download the data.
+            The query dictionary that will be used to query and download the data.
         """
 
-        df = pd.read_csv(csv_file, sep = ",")
-        source_dict = df.to_dict(orient='list')
+        self.master_info = pd.read_csv(csv_file, sep = ",")  # this is the DataFrame that contains all the information. New information will be added during the analysis pipeline.
+        source_dict = self.master_info.to_dict(orient='list')
 
-        self.obsquery_info = self._standardize_obsquery_input(**source_dict)
+        self.obsquery_info = self._standardize_obsquery_input(source_dict)  # this is the dictionary usd to query and download data
 
         return self.obsquery_info
 
@@ -111,30 +123,91 @@ class SwiftDownload():
     def get_obsquery_info(self):
         
         """
-        The obsquery information.
+        The dictionary used to query and download data.
         """
 
         return self.obsquery_info
-        
-    @staticmethod
-    def slice_dict_by_index(input_dict, index, remove_keys = None):
+
+    @property
+    def get_master_info(self):
 
         """
+        The complete master information of the source.
+        """
+
+        return self.master_info
+
+    @property
+    def get_source_names(self):
+
+        """
+        Get the names of the downloaded sources. This is the source name from the meta information used to download the data.
+        It's not necessary the source name in the fits header.
+        """
+
+        return self.master_info["name"].to_list()
+        
+    @staticmethod
+    def slice_dict(input_dict, slice_index = None, slice_value = None, slice_key = None, remove_keys = None):
+
+        """
+        Assume that the values of each keys corresponding to a specific source, and you want to get the information of a specific source. 
+        It means that you slice the dictionary vertically respect to the keys.
+
+        For example you want to slice this dictionary:
+        
+        {'name': ['4FGL J0700.5-6610', 'B3 0850+443', '87GB 213913.0+293303'],
+         'targetid': [38456, 14051, 16150],
+         'window_lower': ['2024-01-01', '2021-01-01', '2023-07-10'],
+         'window_upper': ['2024-03-10', '2021-03-10', '2023-08-10']}
+
+        1. You can use `slice_index = [1, 2]` to get the name, targetid, window_lower and window_upper:
+            {'name': ['B3 0850+443', '87GB 213913.0+293303'],
+             'targetid': [14051, 16150],
+             'window_lower': ['2021-01-01', '2023-07-10'],
+             'window_upper': ['2021-03-10', '2023-08-10']}
+
+        2. You can also use `slice_value = ['B3 0850+443', '87GB 213913.0+293303']` and `slice_key = "name"` to get the same output dictionary
+            {'name': ['B3 0850+443', '87GB 213913.0+293303'],
+             'targetid': [14051, 16150],
+             'window_lower': ['2021-01-01', '2023-07-10'],
+             'window_upper': ['2021-03-10', '2023-08-10']}
+        
+        Parameters
+        ----------
         input_dict : dict
             The input dictionary. 
-        index : int
-            The index of the element to be sliced in the value of each key.
+        slice_index : iterable object, optional
+            The index/indices of the element to be sliced from each key.
+        slice_value : iterable object, optional
+            The value(s) to be sliced for a specific `slice_key`.
+        slice_key : optional
+            The key used to find the value(s) to be sliced.
         remove_keys : list or str, optional
             The key(s) to be removed from the new sliced dictionary (the default is `None`, which means no keys will be removed).
+
+        Returns
+        -------
+        new_dict : dict
+            The new sliced dictionary.
         """
         new_dict = {}
 
-        for key, value in input_dict.items():
+        # if the slice_value(s) and slice_key are given, use them to find the index(indices) the slice_value(s)
+        if slice_value is not None:
+            if not isinstance(slice_value, list):
+                slice_value = [slice_value]
+            slice_index = [input_dict[slice_key].index(i) for i in slice_value]
+        else:
+            if isinstance(slice_index, int):
+                slice_index = [slice_index]
 
+        # construct the new sliced dictionary by the index/indices
+        for key, value in input_dict.items():
             if not isinstance(value, list):
-                raise ValueError("The value of each key must be a list, so it can be sliced by index.")
+                raise ValueError("The value of each key must be a list to be sliced by index.")   
             else:
-                new_dict[key] = value[index]
+                new_dict[key] = [value[i] for i in slice_index]
 
         if remove_keys is not None:
             if isinstance(remove_keys, str):
@@ -164,16 +237,16 @@ class SwiftDownload():
         target_num = len(self.obsquery_info["name"])
 
         for i in np.arange(target_num):
-            target_info = SwiftDownload.slice_dict_by_index(input_dict = self.obsquery_info, index = i, remove_keys = ["window_lower", "window_upper"])
-            tagrt_name = target_info["name"]
+            target_info = SwiftDownload.slice_dict(input_dict = self.obsquery_info, slice_index = int(i), remove_keys = ["window_lower", "window_upper"])
+            target_name = target_info["name"][0]
 
             oq = ObsQuery(radius = radius, 
                           begin = self.obsquery_info["window_lower"][i], end = self.obsquery_info["window_upper"][i], 
                           **target_info)
             id_ = "00000000000"  # this variable will be used to avoid downloading the same data file mutiple times by comparing the observation id
-            print(f"Downloading data for {tagrt_name} ...")
+            print(f"Downloading data for {target_name} ...")
 
-            target_dir = del_then_create_folder(folder_dir = self.download_dir / tagrt_name)
+            target_dir = del_then_create_folder(folder_dir = self.download_dir / target_name)
             
 
             for i in np.flip(np.arange(-len(oq), 0)):
@@ -189,4 +262,17 @@ class SwiftDownload():
                         print(f"{oq[i].obsid} uvod mode {oq[i].uvot_mode} is not the one you requested as {uvotmode}, skipping ...")
                         id_ = oq[i].obsid
     
-            
+    def _organize_files(self):
+
+        """
+        Organize the downloaded files. It won't include the files that are already there:
+        - unzip the files;
+        - change the file extension to fit so they can be recognized by `mImageFileCollection`;
+        - move the image files to the source folder.
+
+        It will also create a dictionary containing both the target name, coordinates, target id and observation id(s).
+        """
+
+        for source_name in self.obsquery_info["name"]:
+            src_dir = self.download_dir / source_name
+            #obs_id = 
