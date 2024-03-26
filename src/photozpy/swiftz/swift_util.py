@@ -5,8 +5,7 @@ Other contributor(s):
 
 Main function: 
 - Download Swift data based on the quires.
-- Generate metadata of the data
-- p
+- Unzip the data
 """
 
 from pathlib import Path
