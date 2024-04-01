@@ -191,6 +191,51 @@ class Telescope():
         qtable.write(save_path,format="ascii.ecsv")
 
         return
+
+    def map_filters(self, name, **filter_dict):
+        """
+        Map filter names to standard filter names. 
+
+        Paremeters
+        ----------
+        name: the input filter name to be matched to a standard one.
+        filter_dict: customized filter maping dictionary.
+
+        Return
+        ------
+        mapped_filter: str; the name of the mapped standard filter.
+        """
+
+        if filter_dict == {}:
+            # use the default mappers
+            mappers = {"Sloan g'2": "SDSS_g'", 
+                       "Sloan r'2": "SDSS_r'", 
+                       "Sloan i'2": "SDSS_i'", 
+                       "Sloan z'2": "SDSS_z'", 
+                       "SDSS_g": "SDSS_g'", 
+                       "SDSS_r": "SDSS_r'", 
+                       "SDSS_i": "SDSS_i'", 
+                       "SDSS_z": "SDSS_z'",
+                       "Bessell I": "Bessell_I"}#,
+                       # "B": "ubb",
+                       # "UVM2": "um2",
+                       # "U": "uuu",
+                       # "V": "uvv",
+                       # "UVW1": "uw1",
+                       # "UVW2": "uw2"}
+        else:
+            mappers = filter_dict
+            
+        mapped_filters = [value for key,value in mappers.items() if key == name]
+        mapped_filters = [*set(mapped_filters)] # remove the duplicated filter names
+        
+        if len(mapped_filters) == 0:
+            raise ValueError("Mapping the input filter failed! No mapped filter {name} was found!")
+        elif len(mapped_filters) > 1:
+            print(mapped_filters)
+            raise ValueError("Mapping the input filter failed! More than two mapped filters are found!")
+        else:
+            return mapped_filters[0]
     
                 
         

@@ -1,4 +1,4 @@
 telescope,ccd,ccd_gain,ccd_rdnoise,mode,filters
 CT,Andor,1.0,7.1,griz,SDSS_g'/SDSS_r'/SDSS_i'/SDSS_z'/Bessell_I
 RM,Andor,1.0,6.3,griz,SDSS_g'/SDSS_r'/SDSS_i'/SDSS_z'/Bessell_I
-Swift,UVOT,1,0,0X30ED,ubb/um2/uuu/uvv/uw1/uw2
+Swift,UVOT,1,0,0X30ED,B/UVM2/U/V/UVW1/UVW2

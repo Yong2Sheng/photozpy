@@ -76,6 +76,62 @@ class mImageFileCollection():
 
         else:
             return self.mcollection[index]
+
+
+    def filter_master_collection(self, header, value):
+
+        """
+        Filter the master collection based on the headers and values to get one image collection.
+
+        Parameters
+        ----------
+        header : str
+            The header name.
+        value : str or list
+            The corresponding value(s).
+
+        Returns
+        -------
+        ccdproc.ImageFileCollection
+            The filtered image collection.
+        """
+
+        pass
+
+    
+    def get_header_values(self, header_name, index = None):
+        
+        """
+        Get the header values from an image collection. The repeated values will be removed.
+
+        Paremeters
+        ----------
+        header_name
+        headers
+
+        Returns
+        -------
+        list
+            The values of the header
+        """
+
+        return image_collection.values(header, unique = True)
+
+    def refresh_collections(self, index = None):
+
+        """
+        Refresh the collections to reflect the changes of the fits files.
+
+        Paremeters
+        ----------
+        index : int, optional
+            The index of the collection to be refreshed. (the default is `None`, which means all the collections will be refreshed).
+
+        """
+        pass
+
+        
+        
                     
 
         

@@ -263,12 +263,13 @@ class SwiftDownload():
                         id_ = oq[i].obsid
 
         
-        source_names = self.obsquery_info["name"]
-        for source_name in source_names:
-            src_dir = self.download_dir / source_name
-            files = list(src_dir.rglob('*sk*'))
-            for file in files:
-                ungz_file(file_path = file, out_dir = src_dir)
+        if organize is True:
+            source_names = self.obsquery_info["name"]
+            for source_name in source_names:
+                src_dir = self.download_dir / source_name
+                files = list(src_dir.rglob('*sk*'))
+                for file in files:
+                    ungz_file(file_path = file, out_dir = src_dir)
 
         return
                 

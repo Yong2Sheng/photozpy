@@ -323,7 +323,13 @@ class HeaderManipulation():
                        "SDSS_r": "SDSS_r'", 
                        "SDSS_i": "SDSS_i'", 
                        "SDSS_z": "SDSS_z'",
-                       "Bessell I": "Bessell_I"}
+                       "Bessell I": "Bessell_I",
+                       "B": "ubb",
+                       "UVM2": "um2",
+                       "U": "uuu",
+                       "V": "uvv",
+                       "UVW1": "uw1",
+                       "UVW2": "uw2"}
         else:
             mappers = filter_dict
             
