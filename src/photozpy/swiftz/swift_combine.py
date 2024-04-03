@@ -14,10 +14,12 @@ from ccdproc import ImageFileCollection
 from astropy.io import fits
 from pathlib import Path
 import os
+import numpy as np
+import shutil
 
 class SwiftCombine():
 
-    def __init__(image_collection, telescope):
+    def __init__(self, image_collection, telescope):
 
         """
         image_collection : ccdproc.image_collection.ImageFileCollection or photozpy.mimage_collection.mImageFileCollection
@@ -52,7 +54,7 @@ class SwiftCombine():
 
         Example run
         -----------
-        find_mext_keywords(file_path, "ASPCORR", "HDUCLAS1")
+        find_multiext_keywords(file_path, "ASPCORR", "HDUCLAS1")
         Out：
         {'ext_No': [1, 2],
         'EXTNAME': ['bb649482961I', 'bb649505811I'],
@@ -95,7 +97,7 @@ class SwiftCombine():
         Boolean
         """
         
-        dict_exts = SwiftCombine.find_mext_keywords(file, "ASPCORR")
+        dict_exts = SwiftCombine.find_multiext_keywords(file, "ASPCORR")
         asps = dict_exts["ASPCORR"]
         check = ["Yes" for i in asps if "DIRECT" in i]
         if len(check) == len(asps):
@@ -103,7 +105,7 @@ class SwiftCombine():
         elif len(check) != len(asps):
             return False
 
-    def sum_extensions(self, fits_path, out_path = None):
+    def sum_extensions(self, fits_file_path, out_path = None, delete_files = False, return_full_path = True):
 
         """
         Sum the extensions within the same fits file.
@@ -121,29 +123,35 @@ class SwiftCombine():
             The path of the output file.
         """
 
-        fits_path = Path(fits_path)
-        fits_file_name = fits_path.name
+        fits_file_path = Path(fits_file_path)
+        fits_file_name = fits_file_path.name
         
         # first check if the aspect correction is correct
-        if not SwiftCombine.check_ASPCORR(fits_path):
-            print(f"The apsect correction is not done for {fits_path}.")
+        if not SwiftCombine.check_ASPCORR(fits_file_path):
+            print(f"The apsect correction is not done for {fits_file_path}.")
             print(f"Skipping {fits_file_name} since the ASPECT isn't corrected properly! It will be deleted.")
             
         else:
-            headers = fits.get_header(file_path)
-            filter = self._telescope.map_filters(headers["FILTER"])
+            headers = fits.getheader(fits_file_path)
+            filter_ = headers["FILTER"]
             if out_path is None:
-                out_path = fits_path.parent / f"{filter}.fits"  # if the out_name is not given, the file will be saved as the filter name.
+                out_path = fits_file_path.parent / f"{filter_}.fits"  # if the out_name is not given, the file will be saved as the filter name.
             
-            os.system(f"uvotimsum infile={fits_path} outfile={out_path} | tee -a uvotimsum_log.txt >/dev/null 2>&1")
+            print(f"uvotimsum infile={fits_file_path} outfile={out_path} | tee -a uvotimsum_log.txt >/dev/null 2>&1")
+            os.system(f"uvotimsum infile={fits_file_path} outfile={out_path} | tee -a uvotimsum_log.txt >/dev/null 2>&1")
+            out_path_name = out_path.name
 
-        os.remove(fits_path) 
+        if delete_files is True:
+            os.remove(fits_file_path) 
 
-        print(f"Extensions in {fits_file_name} has been summed!")
+        print(f"Extensions in {fits_file_name} has been summed to {out_path_name}\n")
 
-        return out_name
+        if return_full_path is True:
+            return out_path
+        else:
+            return out_path.name
 
-    def sum_fits_files(self, image_collection, out_path = None):
+    def sum_fits_files(self, image_collection, out_path = None, delete_files = False):
 
         """
         Sum the fits files. 
@@ -163,7 +171,7 @@ class SwiftCombine():
 
 
         # check if the filters are the same
-        collection_filter = image_collection.values("filters", unique = True)  # collection_filter is list even if there is only one value
+        collection_filter = mImageFileCollection._get_header_values(image_collection, "FILTER", unique = True)  # collection_filter is list even if there is only one value
         if len(collection_filter) != 1:
             raise ValueError("The fits files to sum have more than one filters!")
         else:
@@ -172,23 +180,32 @@ class SwiftCombine():
         if not collection_filter in self._telescope.filters:
             raise ValueError("The filter is not in the telescope spec!")
 
-        file_path = image_collection.files_filtered(include_path = True)
-        file_names = image_collection.files_filtered(include_path = False)
-        
+        fits_file_path = image_collection.files_filtered(include_path = True)
+        fits_file_names = image_collection.files_filtered(include_path = False)
+
+        # let't append the observations first before using uvotimsum
+        appended_file = Path(fits_file_path[0]).with_name(f"appended_{collection_filter}.fits")
+        shutil.copy2(fits_file_path[0], appended_file)
+        for i in fits_file_path[1:]:
+            os.system(f"fappend {i} {appended_file}")
+
         # determine the output path
         if out_path is None:
-            out_path = Path(files[0]).parent / f"{collection_filter}.fits"
+            out_path = Path(fits_file_path[0]).parent / f"{collection_filter}.fits"
+        
+        os.system(f"uvotimsum exclude=NONE infile={appended_file} outfile={out_path} | tee -a uvotimsum_log.txt >/dev/null 2>&1")
 
-        os.system(f"uvotimsum exclude=NONE infile={file_path} outfile={out_path} | tee -a uvotimsum_log.txt >/dev/null 2>&1")
+        print(f"{fits_file_names} has been summed to {collection_filter}.fits\n")
 
-        print(f"{file_names} has been summed to {collection_filter}.fits")
-
-        os.remove(i) for i in file_path
+        # remove the files that are no longer needed.
+        if delete_files is True:
+            for i in fits_file_path + [appended_file]:
+                os.remove(i)
 
         return out_path
 
 
-    def sum_all_files(self):
+    def sum_all_files(self, delete_files = False):
 
         """
         Sum all the fits files in the multi image collection.
@@ -199,23 +216,24 @@ class SwiftCombine():
             The new collection that contain the summed fits files.
         """
 
-        for collection in self.mcollection:
+        for collection in self._mcollection:
 
             # get the target name
             target_dir = Path(collection.location)
             target_name = target_dir.parts[-1]  # ('data', 'B3 0850+443')[1] is 'B3 0850+443'
 
             # loop over filters
-            for filter in self._telecope:
+            for filter_ in self._telescope.filters:
                 
                 # First sum all the extensions in the same fits file
-                files = collection.files_filtered(include_path = True, filter = filter)
+                add_filter = {"filter": filter_}
+                files = collection.files_filtered(include_path = True, **add_filter)
 
                 if len(files) == 0:
-                    print(f"No {target_name} in {filter}, skipping ......")
+                    print(f"No {target_name} in {filter_}, skipping ......")
 
                 elif len(files) == 1:
-                    self.sum_extensions(fits_path = files[0])
+                    self.sum_extensions(fits_file_path = files[0])
 
                 elif len(files) > 1:
                     num = len(files)
@@ -223,13 +241,17 @@ class SwiftCombine():
                     # sum the extensions for each file
                     summed_observations = []
                     for i in np.arange(num):
-                        _summed = self.sum_extensions(fits_path = files[i], out_path = f"{filter}_{i}")
+                        _out_path = Path(files[i]).parent / f"{filter_}_{i}.fits"
+                        _summed = self.sum_extensions(fits_file_path = files[i], out_path = _out_path, 
+                                                      delete_files = delete_files, return_full_path = False)
                         summed_observations += [_summed]  # collect the file path of summed observations
 
                     # sum the observations
                     _collection = ImageFileCollection(location = target_dir, filenames = summed_observations)
+                    self.sum_fits_files(image_collection = _collection, delete_files = delete_files)
 
             print(f"{target_name} sum completed!")
+            print("----------------------------------------------------------------\n")
 
         return
 

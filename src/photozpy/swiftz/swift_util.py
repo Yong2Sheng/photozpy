@@ -246,7 +246,7 @@ class SwiftDownload():
             id_ = "00000000000"  # this variable will be used to avoid downloading the same data file mutiple times by comparing the observation id
             print(f"Downloading data for {target_name} ...")
 
-            target_dir = del_then_create_folder(folder_dir = self.download_dir / target_name)
+            target_dir = del_then_create_folder(folder_dir = self.download_dir / target_name.replace(" ", "_"))  # linux doesn't work with spaces in path
             
 
             for i in np.flip(np.arange(-len(oq), 0)):
@@ -266,7 +266,7 @@ class SwiftDownload():
         if organize is True:
             source_names = self.obsquery_info["name"]
             for source_name in source_names:
-                src_dir = self.download_dir / source_name
+                src_dir = self.download_dir / source_name.replace(" ", "_")  # linux doesn't work with spaces in path
                 files = list(src_dir.rglob('*sk*'))
                 for file in files:
                     ungz_file(file_path = file, out_dir = src_dir)

@@ -9,6 +9,7 @@ This is the extension of astropy.ccdproc.ImageFileCollection to fit the needs fo
 
 from ccdproc import ImageFileCollection
 from pathlib import Path
+from astropy.io import fits
 
 class mImageFileCollection():
     
@@ -130,6 +131,54 @@ class mImageFileCollection():
         """
         pass
 
+
+    @staticmethod
+    def _get_header_values(image_collection, headers, unique = True):
+
+        """
+        Get the header valus from the image collection. I wrote this because the ImageFileCollection.values() doesn't work!
+
+        """
+
+        if isinstance(headers, str):
+            headers = [headers]
+
+        file_paths = image_collection.files_filtered(include_path = True)
+
+        values_list = []
+        for file_path in file_paths:
+            header_all = fits.getheader(file_path)
+            for header in headers:
+                value_ = header_all[header]
+                values_list.append(value_)
+
+        if unique:
+            values_list = [*set(values_list)]
+
+        return values_list
+
+    def get_collection_header_values(self, headers, index = None, unique = True):
+
+        if isinstance(headers, str):
+            headers = [headers]
+
+        file_paths = image_collection.files_filtered(include_path = True)
+
+        if index is not None:
+            _collection = self.mcollection[index]
+            header_values = mImageFileCollection._get_header_values(_collection, headers = headers)
+
+        else:
+            header_values = []
+            for i in np.arange(self.ncollection):
+                _collection = self.mcollection[i]
+                _header_values = mImageFileCollection._get_header_values(_collection, headers = headers)
+                header_values += _header_values
+                
+        if unique:
+            header_values = [*set(header_values)]
+
+        return header_values
         
         
                     
