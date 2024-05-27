@@ -233,7 +233,10 @@ class SwiftCombine():
                     print(f"No {target_name} in {filter_}, skipping ......")
 
                 elif len(files) == 1:
-                    self.sum_extensions(fits_file_path = files[0])
+                    summed_path = self.sum_extensions(fits_file_path = files[0], return_full_path = True)
+                    with fits.open(summed_path, mode = "update") as hdul:
+                        hdul[0].header["OBJECT"] = target_name.replace("_", " ")
+                        hdul.flush()
 
                 elif len(files) > 1:
                     num = len(files)
@@ -248,7 +251,10 @@ class SwiftCombine():
 
                     # sum the observations
                     _collection = ImageFileCollection(location = target_dir, filenames = summed_observations)
-                    self.sum_fits_files(image_collection = _collection, delete_files = delete_files)
+                    summed_path = self.sum_fits_files(image_collection = _collection, delete_files = delete_files)
+                    with fits.open(summed_path, mode = "update") as hdul:
+                        hdul[0].header["OBJECT"] = target_name.replace("_", " ")
+                        hdul.flush()
 
             print(f"{target_name} sum completed!")
             print("----------------------------------------------------------------\n")

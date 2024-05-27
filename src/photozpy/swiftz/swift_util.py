@@ -15,6 +15,7 @@ import numpy as np
 import copy
 from ..convenience_functions import create_folder, del_then_create_folder, ungz_file
 import shutil 
+from astropy.io import fits
 
 class SwiftDownload():
 
@@ -269,7 +270,11 @@ class SwiftDownload():
                 src_dir = self.download_dir / source_name.replace(" ", "_")  # linux doesn't work with spaces in path
                 files = list(src_dir.rglob('*sk*'))
                 for file in files:
-                    ungz_file(file_path = file, out_dir = src_dir)
+                    fits_path = ungz_file(file_path = file, out_dir = src_dir, return_path = True)
+                    
+                    # with fits.open(fits_path, mode = "update") as hdul:
+                    #     hdul[0].header["OBJECT"] = source_name
+                    #     hdul.flush()
 
         return
                 

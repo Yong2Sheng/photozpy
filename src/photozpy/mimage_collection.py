@@ -180,7 +180,6 @@ class mImageFileCollection():
 
         return header_values
         
-        
                     
 
         

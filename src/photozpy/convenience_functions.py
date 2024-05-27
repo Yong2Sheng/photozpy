@@ -11,7 +11,7 @@ from pathlib import Path
 import shutil
 import gzip
 
-def ungz_file(file_path, out_dir = None):
+def ungz_file(file_path, out_dir = None, return_path = False):
 
     """
     Ungz file and change the extension from img to fits.
@@ -32,7 +32,10 @@ def ungz_file(file_path, out_dir = None):
     open(ungzed_path, "wb+").write(gz_file.read())
     gz_file.close()
 
-    return
+    if return_path == False:
+        return
+    else:
+        return ungzed_path
 
 
 def create_folder(folder_dir):
