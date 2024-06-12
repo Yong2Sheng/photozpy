@@ -1,4 +1,4 @@
-from .swiftz import SwiftDownload, SwiftCombine, Regions
+from .swiftz import SwiftDownload, SwiftCombine, PhotozRegions
 from .telescope import Telescope
 from .collection_manager import CollectionManager
 from .calibration import HeaderCorrection, HeaderManipulation, Combine, Reduction, Registration, PlateSolving, Artifacts

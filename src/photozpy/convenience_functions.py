@@ -2,14 +2,68 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib
 from astropy.visualization import astropy_mpl_style, simple_norm
+from astropy.stats import SigmaClip
+from photutils.background import Background2D, MedianBackground
 from astropy.io import fits
-import numpy as np
 from astropy.nddata import CCDData
 from astropy import units as u
 import os
 from pathlib import Path
 import shutil
 import gzip
+import numpy as np
+
+def estimate_background(image_path = None, array_data = None, hdu = 0, unit = None, sigma = 3, box_size = (20, 20), filter_size = (5, 5), **kwargs):
+
+    """
+    Estimate the 2D background of the fits image or array data by `photutils.background.MedianBackgroun` with sigma clip on the data.
+
+    Parameters
+    ----------
+    image_path : str or pathlib.Path, optional
+        The path to the fits file. It will overwrite `array_data` if both are provided.
+    array_data : numpy.ndarray,optional
+        The array of the image data.
+    hdu : int, optional
+        The hdu index of the image data in the fits file.
+    unit : str, optional
+        The unit of the image array data.
+    sigma : float, optional
+        The number of standard deviations to use for both the lower
+        and upper clipping limit. These limits are overridden by
+        ``sigma_lower`` and ``sigma_upper``, if input. The default is 3.
+    box_size : int or array_like (int), optional
+        The box size along each axis. If ``box_size`` is a scalar then
+        a square box of size ``box_size`` will be used. If ``box_size``
+        has two elements, they must be in ``(ny, nx)`` order. For best
+        results, the box shape should be chosen such that the ``data``
+        are covered by an integer number of boxes in both dimensions.
+        When this is not the case, see the ``edge_method`` keyword for
+        more options.
+    **kwargs
+        The parameters passed to `photutils.background.Background2D`.
+
+    Returns
+    -------
+    estimated_bkg : photutils.background.background_2d.Background2D
+        The estimated background array.
+    array_data_no_bkg : numpy.ndarray
+    """
+
+    if image_path is not None:
+        ccddata = CCDData.read(image_path, hdu = hdu, unit = unit)
+        array_data = ccddata.data
+    elif array_data is None:
+        raise TypeError("You must provide fits path or array data!")
+
+    sigma_clip = SigmaClip(sigma = sigma)
+    bkg_estimator = MedianBackground()
+    estimated_bkg = Background2D(array_data, box_size = box_size, filter_size = filter_size, 
+                                 sigma_clip=sigma_clip, bkg_estimator=bkg_estimator, **kwargs)
+    
+    array_data_no_bkg = array_data - estimated_bkg.background
+
+    return estimated_bkg, array_data_no_bkg
 
 def ungz_file(file_path, out_dir = None, return_path = False):
 
@@ -104,29 +158,29 @@ def convert_coords(image_path = None, wcs = None, skycoords = None, pixelcoords 
     if image_path == None and wcs == None:
         raise TypeError("You must give a file path or asrtropy.wcs.WCS obkect as the input!")
 
-    if skycoords == None and pixelcoords == None:
+    if skycoords == None and pixelcoords is None:
         raise TypeError("You must give sky coordinates or pixel coordinates as the input!")
 
-    elif skycoords != None and pixelcoords != None:
+    elif skycoords != None and pixelcoords is not None:
         raise TypeError("Please only input the sky coordinates or the pixel coordinates!")
 
     # Read the file and get the wcs object
     if wcs != None:
         wcs_object = wcs
     else:
-        data = CCDData.read(image_path, unit = "adu")
+        data = CCDData.read(image_path)#, unit = "adu")
         wcs_object = data.wcs
 
-    if skycoords != None and pixelcoords == None:
+    if skycoords != None and pixelcoords is None:
         pixelcoords = wcs_object.world_to_pixel(skycoords)
         pixelcoords = np.array((pixelcoords)).T # transfer the array so it's ra/dec in each column
         out = pixelcoords # output variable
         if verbose == True:
             print("Conversion from sky coordiantes to pixel coordinates completed!")
 
-    elif skycoords == None and pixelcoords != None:
-        xpixel_coords = pixelcoords[0]
-        ypixel_coords = pixelcoords[1]
+    elif skycoords == None and pixelcoords is not None:
+        xpixel_coords = pixelcoords[:,0]
+        ypixel_coords = pixelcoords[:,1]
         radec = wcs_object.pixel_to_world(xpixel_coords, ypixel_coords)
         out = radec
         if verbose == True:
