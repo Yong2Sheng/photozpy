@@ -272,9 +272,12 @@ class SwiftDownload():
                 for file in files:
                     fits_path = ungz_file(file_path = file, out_dir = src_dir, return_path = True)
                     
-                    # with fits.open(fits_path, mode = "update") as hdul:
-                    #     hdul[0].header["OBJECT"] = source_name
-                    #     hdul.flush()
+                    with fits.open(fits_path, mode = "update") as hdul:
+                        hdul[0].header["OBJECT"] = source_name
+                        hdul[1].header["OBJECT"] = source_name
+                        hdul[0].header["SUMTYP"] = "NOTSUM"
+                        hdul[1].header["SUMTYP"] = "NOTSUM"
+                        hdul.flush()
 
         return
                 

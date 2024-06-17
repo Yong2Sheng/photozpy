@@ -78,7 +78,7 @@ class PhotozRegions():
         region_path = region_dir / src_region_fname
 
         coord_frame = coord.frame.name
-        str_coord = coord.to_string().split(" ")  
+        str_coord = coord.to_string(precision = 10).split(" ")  
         # this only works for one set of skycoords. There will be errors if you have more than a set of skycoords
         # a set of coord: str_coord.to_string(precision = 6)  ==> '105.130269 -66.179291'  <== this is string
         # two sets of coord: str_coord.to_string(precision = 6)  ==> ['105.130269 -66.179291', '105.169080 -66.158375']  <== this is list
@@ -130,12 +130,12 @@ class PhotozRegions():
                 # convert the skycoord to pixelcoord since centroid fitting only works with pixelcoord
                 pixel_coord = convert_coords(wcs = ccddata.wcs, skycoords = sky_coord, pixelcoords = None, verbose = False)
 
-                x_pixel_center = int(np.rint(pixel_coord[0])) # round the pixelcoord to int
-                y_pixel_center = int(np.rint(pixel_coord[1]))
+                # x_pixel_center = int(np.rint(pixel_coord[0])) # round the pixelcoord to int
+                # y_pixel_center = int(np.rint(pixel_coord[1]))
 
                 # get the centroid pixelcoords
                 x_centroids , y_centroids = centroid_sources(array_data_no_bkg, 
-                                                             x_pixel_center, y_pixel_center, 
+                                                             pixel_coord[0], pixel_coord[1], 
                                                              box_size = box_size, 
                                                              centroid_func = centroid_quadratic)
                 if verbose == True:

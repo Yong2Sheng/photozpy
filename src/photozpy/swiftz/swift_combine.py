@@ -220,13 +220,14 @@ class SwiftCombine():
 
             # get the target name
             target_dir = Path(collection.location)
-            target_name = target_dir.parts[-1]  # ('data', 'B3 0850+443')[1] is 'B3 0850+443'
+            target_name = target_dir.parts[-1]  # ('data', 'B3_0850+443')[-1] is 'B3_0850+443'
 
             # loop over filters
             for filter_ in self._telescope.filters:
                 
                 # First sum all the extensions in the same fits file
-                add_filter = {"filter": filter_}
+                add_filter = {"FILTER": filter_,
+                              "SUMTYP": "NOTSUM"}
                 files = collection.files_filtered(include_path = True, **add_filter)
 
                 if len(files) == 0:
@@ -236,6 +237,9 @@ class SwiftCombine():
                     summed_path = self.sum_extensions(fits_file_path = files[0], return_full_path = True)
                     with fits.open(summed_path, mode = "update") as hdul:
                         hdul[0].header["OBJECT"] = target_name.replace("_", " ")
+                        hdul[1].header["OBJECT"] = target_name.replace("_", " ")
+                        hdul[0].header["SUMTYP"] = "FINAL"
+                        hdul[1].header["SUMTYP"] = "FINAL"
                         hdul.flush()
 
                 elif len(files) > 1:
@@ -247,6 +251,12 @@ class SwiftCombine():
                         _out_path = Path(files[i]).parent / f"{filter_}_{i}.fits"
                         _summed = self.sum_extensions(fits_file_path = files[i], out_path = _out_path, 
                                                       delete_files = delete_files, return_full_path = False)
+                        with fits.open(_out_path, mode = "update") as hdul:
+                            hdul[0].header["OBJECT"] = target_name.replace("_", " ")
+                            hdul[1].header["OBJECT"] = target_name.replace("_", " ")
+                            hdul[0].header["SUMTYP"] = "SUMMED"
+                            hdul[1].header["SUMTYP"] = "SUMMED"
+                            hdul.flush()
                         summed_observations += [_summed]  # collect the file path of summed observations
 
                     # sum the observations
@@ -254,6 +264,9 @@ class SwiftCombine():
                     summed_path = self.sum_fits_files(image_collection = _collection, delete_files = delete_files)
                     with fits.open(summed_path, mode = "update") as hdul:
                         hdul[0].header["OBJECT"] = target_name.replace("_", " ")
+                        hdul[1].header["OBJECT"] = target_name.replace("_", " ")
+                        hdul[0].header["SUMTYP"] = "FINAL"
+                        hdul[1].header["SUMTYP"] = "FINAL"
                         hdul.flush()
 
             print(f"{target_name} sum completed!")
