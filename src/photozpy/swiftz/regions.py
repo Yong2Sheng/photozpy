@@ -14,11 +14,10 @@ import numpy as np
 from pathlib import Path
 from ..convenience_functions import convert_coords, estimate_background
 import pandas as pd
-from tqdm.notebook import tqdm
 from ccdproc import ImageFileCollection
 from ..mimage_collection import mImageFileCollection
 import matplotlib.pyplot as plt
-from astropy.visualization import SqrtStretch, LogStretch
+from astropy.visualization import LogStretch
 from astropy.visualization.mpl_normalize import ImageNormalize
 from astropy.coordinates import SkyCoord
 import shutil
@@ -111,7 +110,7 @@ class PhotozRegions():
             source_name = collection_path.parts[-1].replace("_", " ")
             print(f"Generating source regions for {source_name}")
 
-            for image_path in collection.files_filtered(include_path = True):
+            for image_path in collection.files_filtered(include_path = True, **{"SUMTYP" : "FINAL"}):
                 
                 image_path = Path(image_path)
                 # read image data
@@ -190,16 +189,16 @@ class PhotozRegions():
             if save_dir is None:
                 save_dir = image_path.parent
         elif array_data is None or wcs is None:
-            raise ValueError(f"Please provide both array_data and wcs!")
+            raise ValueError("Please provide both array_data and wcs!")
         else:
             if save_dir is None:
-                raise ValueError(f"Please provide save directory of the image.")
+                raise ValueError("Please provide save directory of the image.")
             else:
                 save_dir = Path(save_dir)
     
         # read regions
         if src_region_path is None and bkg_region_path is None:
-            raise TypeError(f"You must provide at least one region file.")
+            raise TypeError("You must provide at least one region file.")
             
         if src_region_path is not None:
             source_skyregion = Regions.read(src_region_path, format = "ds9")[0]

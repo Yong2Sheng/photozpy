@@ -30,7 +30,7 @@ class SwiftCombine():
             
         # switch image_collection from ImageFileCollection to mImageFileCollection to make it standard for the pipeline
         if isinstance(image_collection, ImageFileCollection):
-            self._mcollection = mImageFileCollection(location = image_collection.location, filenames = image_collection.files)
+            self._mcollection = mImageFileCollection(location = image_collection.location, filenames = image_collection.files)  # this might contain unwanted fits files
 
         elif isinstance(image_collection, mImageFileCollection):
             self._mcollection = image_collection
@@ -137,8 +137,8 @@ class SwiftCombine():
             if out_path is None:
                 out_path = fits_file_path.parent / f"{filter_}.fits"  # if the out_name is not given, the file will be saved as the filter name.
             
-            print(f"uvotimsum infile={fits_file_path} outfile={out_path} | tee -a uvotimsum_log.txt >/dev/null 2>&1")
-            os.system(f"uvotimsum infile={fits_file_path} outfile={out_path} | tee -a uvotimsum_log.txt >/dev/null 2>&1")
+            print(f"uvotimsum infile={fits_file_path} outfile={out_path} clobber=yes cleanup=yes | tee -a uvotimsum_log.txt >/dev/null 2>&1")
+            os.system(f"uvotimsum infile={fits_file_path} outfile={out_path} clobber=yes cleanup=yes | tee -a uvotimsum_log.txt >/dev/null 2>&1")
             out_path_name = out_path.name
 
         if delete_files is True:
@@ -193,7 +193,7 @@ class SwiftCombine():
         if out_path is None:
             out_path = Path(fits_file_path[0]).parent / f"{collection_filter}.fits"
         
-        os.system(f"uvotimsum exclude=NONE infile={appended_file} outfile={out_path} | tee -a uvotimsum_log.txt >/dev/null 2>&1")
+        os.system(f"uvotimsum exclude=NONE infile={appended_file} outfile={out_path} clobber=yes cleanup=yes | tee -a uvotimsum_log.txt >/dev/null 2>&1")
 
         print(f"{fits_file_names} has been summed to {collection_filter}.fits\n")
 
@@ -273,6 +273,8 @@ class SwiftCombine():
             print("----------------------------------------------------------------\n")
 
         return
+
+        
 
         
 

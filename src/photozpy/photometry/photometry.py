@@ -304,16 +304,16 @@ class SwiftPhotometry():
         """
 
         # init the dataframe to store the results
-        df_results = pd.DataFrame(columns = ['source_name', "UVW2", "UVW2_err", "UVM2", "UVM2_err", "UVW1", "UVW1_err", "U", "U_err", "B", "B_err", "V", "V_err"])
+        df_results = pd.DataFrame(columns = ['name', "UVW2", "UVW2_err", "UVM2", "UVM2_err", "UVW1", "UVW1_err", "U", "U_err", "B", "B_err", "V", "V_err"])
         
         for collection in self._mcollection:
 
             file_location = Path(collection.location)
             source_name_from_path = file_location.parts[-1].replace("_", " ")
-            file_paths = collection.files_filtered(include_path = True, **{"SUMTYPE": "FINAL"})  # only use the final summed fits files
+            file_paths = collection.files_filtered(include_path = True, **{"SUMTYP": "FINAL"})  # only use the final summed fits files
 
             # init the dict to store the photometry for a single source, which will be appended to the main result data frame
-            dict_new = {'source_name' : source_name_from_path,
+            dict_new = {'name' : source_name_from_path,
                         "UVW2" : -99, 
                         "UVW2_err" : -99,
                         "UVM2" : -99,
@@ -370,14 +370,15 @@ class SwiftPhotometry():
                 
                 print("---------------------------------------------------------------------------")
         
-
-            df_results = df_results._append(dict_new, ignore_index = True)
+            
+            df_new = pd.DataFrame(dict_new, index=[0])
+            df_results = pd.concat([df_results, df_new], ignore_index=True)
 
         if self._source_catalog is not None:
             self._source_catalog = Path(self._source_catalog)
-            final_catalog = pd.read_csv(self._source_catalog, sep = ".")
-            final_catalog = pd.merge(final_catalog, df_results, on='source_name')
-            final_catalog.to_csv(self._source_catalog, index=False, overwrite = True, mode = "w")
+            final_catalog = pd.read_csv(self._source_catalog, sep = ",")
+            final_catalog = pd.merge(final_catalog, df_results, on='name')
+            final_catalog.to_csv(Path("") / "mag_results.csv", index=False, mode = "w")
         else:
             df_results.to_csv(Path("") / "mag_results.csv", index=False, mode = "w")
 

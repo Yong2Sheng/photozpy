@@ -65,7 +65,7 @@ def estimate_background(image_path = None, array_data = None, hdu = 0, unit = No
 
     return estimated_bkg, array_data_no_bkg
 
-def ungz_file(file_path, out_dir = None, return_path = False):
+def ungz_file(file_path, out_dir = None, return_path = False, overwrite = True):
 
     """
     Ungz file and change the extension from img to fits.
@@ -76,11 +76,18 @@ def ungz_file(file_path, out_dir = None, return_path = False):
         The dir of the file to be 
     """
 
-    gz_path = file_path
+    gz_path = Path(file_path)
     ungzed_path = gz_path.with_suffix("").with_suffix(".fits")
 
     if out_dir is not None:
         ungzed_path = out_dir / ungzed_path.name
+    
+    # check if the ungzed file exists
+    if ungzed_path.exists():
+        if overwrite is True:
+            os.remove(ungzed_path)
+        else:
+            raise OSError(f"File alreay exists: {ungzed_path}.")
 
     gz_file = gzip.GzipFile(gz_path)
     open(ungzed_path, "wb+").write(gz_file.read())
