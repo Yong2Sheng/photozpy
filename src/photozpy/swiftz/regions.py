@@ -95,7 +95,7 @@ class PhotozRegions():
         return region_path
             
     
-    def get_source_regions(self, box_size = 11, save_image = True, verbose = True, bkg_region_template = False):
+    def get_source_regions(self, box_size = 11, save_image = True, verbose = True, bkg_region_template = False, centroid_method = centroid_quadratic):
 
         """
         image_path : str or pathlib.Path
@@ -125,18 +125,26 @@ class PhotozRegions():
                 ra = self._source_catalog_df[self._source_catalog_df["name"] == source_name]["ra"].to_numpy()[0]
                 dec = self._source_catalog_df[self._source_catalog_df["name"] == source_name]["dec"].to_numpy()[0]
                 sky_coord = SkyCoord(ra = ra, dec = dec, unit = "deg", frame = "icrs")
-        
-                # convert the skycoord to pixelcoord since centroid fitting only works with pixelcoord
+
+                #convert to the pixel coordinate
                 pixel_coord = convert_coords(wcs = ccddata.wcs, skycoords = sky_coord, pixelcoords = None, verbose = False)
 
-                # x_pixel_center = int(np.rint(pixel_coord[0])) # round the pixelcoord to int
-                # y_pixel_center = int(np.rint(pixel_coord[1]))
 
                 # get the centroid pixelcoords
                 x_centroids , y_centroids = centroid_sources(array_data_no_bkg, 
                                                              pixel_coord[0], pixel_coord[1], 
                                                              box_size = box_size, 
-                                                             centroid_func = centroid_quadratic)
+                                                             centroid_func = centroid_method)
+
+                if np.isnan(x_centroids.astype(float)).any(): # check is any of the fitted pixel coordinate is NaN
+                    
+                    print(f"The fitting for {filter_name} using {centroid_method.__name__} failed, switch to {centroid_com.__name__} instead!")
+                    
+                    x_centroids , y_centroids = centroid_sources(array_data_no_bkg, 
+                                                                 pixel_coord[0], pixel_coord[1], 
+                                                                 box_size = box_size, 
+                                                                 centroid_func = centroid_com)
+                    
                 if verbose == True:
                     print(f"The centroid pixel for {filter_name} is ({x_centroids},{y_centroids}).")
                 
@@ -145,6 +153,7 @@ class PhotozRegions():
                                                    skycoords = None, 
                                                    pixelcoords = np.array([x_centroids,y_centroids]).T, 
                                                    verbose = False)[0]  # the converted Skycoord is a list, so event if there is only one set skycoord, I have to use [0] to convert it from a list of skycoord to a skycoord
+
 
                 src_region_path = PhotozRegions.generate_regions(region_dir = image_path.parent, 
                                                                  filter_name = filter_name, 
