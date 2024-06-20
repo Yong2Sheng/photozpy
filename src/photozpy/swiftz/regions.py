@@ -12,7 +12,7 @@ from astropy.nddata import CCDData
 import astropy.units as u
 import numpy as np
 from pathlib import Path
-from ..convenience_functions import convert_coords, estimate_background
+from ..convenience_functions import convert_coords, estimate_background, get_alain_image
 import pandas as pd
 from ccdproc import ImageFileCollection
 from ..mimage_collection import mImageFileCollection
@@ -93,9 +93,33 @@ class PhotozRegions():
             f.write(f'circle({x},{y},{radius}")')
 
         return region_path
-            
     
-    def get_source_regions(self, box_size = 11, save_image = True, verbose = True, bkg_region_template = False, centroid_method = centroid_quadratic):
+    def get_initial_bkg_regions(self):
+        
+        """
+        Generate the initial bkg regions based on the catalog coordinate
+        
+        """
+        for collection in self._mcollection:
+            
+            collection_path = collection.location
+            print(collection_path)
+            source_name = collection_path.parts[-1].replace("_", " ")
+            print(source_name)
+                
+            # read the source coordinate from the source catalog
+            ra = self._source_catalog_df[self._source_catalog_df["name"] == source_name]["ra"].to_numpy()[0]
+            dec = self._source_catalog_df[self._source_catalog_df["name"] == source_name]["dec"].to_numpy()[0]
+            sky_coord = SkyCoord(ra = ra, dec = dec, unit = "deg", frame = "fk5")
+            print(f"ra = {ra}, dec = {dec}")
+            
+            PhotozRegions.generate_regions(region_dir = collection_path, filter_name = "bkg", coord = sky_coord, radius = 30)
+            
+            print("---------------------------------------------------")
+            
+        return
+                
+    def get_source_regions(self, box_size = 11, save_image = True, verbose = True, bkg_region_template = False, centroid_method = centroid_quadratic, aladin = True):
 
         """
         image_path : str or pathlib.Path
@@ -124,7 +148,7 @@ class PhotozRegions():
                 # read the source coordinate from the source catalog
                 ra = self._source_catalog_df[self._source_catalog_df["name"] == source_name]["ra"].to_numpy()[0]
                 dec = self._source_catalog_df[self._source_catalog_df["name"] == source_name]["dec"].to_numpy()[0]
-                sky_coord = SkyCoord(ra = ra, dec = dec, unit = "deg", frame = "icrs")
+                sky_coord = SkyCoord(ra = ra, dec = dec, unit = "deg", frame = "fk5")
 
                 #convert to the pixel coordinate
                 pixel_coord = convert_coords(wcs = ccddata.wcs, skycoords = sky_coord, pixelcoords = None, verbose = False)
@@ -169,6 +193,13 @@ class PhotozRegions():
                     PhotozRegions.plot_regions(array_data = array_data, wcs = ccddata.wcs, filter_name = filter_name, source_name = source_name,
                                                src_region_path = src_region_path, bkg_region_path = bkg_region_path, 
                                                save_dir = image_path.parent, save_image = True)
+            
+            if aladin is True:
+                print(f"Querying aladin image for {source_name}")
+                sky_region_ = CircleSkyRegion(sky_coord, radius = 5*u.arcsec)  # the original sky region defined by the source catalog
+                get_alain_image(wcs = ccddata.wcs, save_dir = image_path.parent, sky_region = sky_region_, 
+                                min_cut = 0.5, max_cut = 99.5, logstretch = 10, source_name = source_name, hips = "CDS/P/DSS2/blue")
+                
             if verbose == True:
                 print("--------------------------------------------------------------------")
 

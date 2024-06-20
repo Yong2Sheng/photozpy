@@ -130,6 +130,7 @@ class SwiftCombine():
         if not SwiftCombine.check_ASPCORR(fits_file_path):
             print(f"The apsect correction is not done for {fits_file_path}.")
             print(f"Skipping {fits_file_name} since the ASPECT isn't corrected properly! It will be deleted.")
+            return
             
         else:
             headers = fits.getheader(fits_file_path)
@@ -141,15 +142,15 @@ class SwiftCombine():
             os.system(f"uvotimsum infile={fits_file_path} outfile={out_path} clobber=yes cleanup=yes | tee -a uvotimsum_log.txt >/dev/null 2>&1")
             out_path_name = out_path.name
 
-        if delete_files is True:
-            os.remove(fits_file_path) 
-
-        print(f"Extensions in {fits_file_name} has been summed to {out_path_name}\n")
-
-        if return_full_path is True:
-            return out_path
-        else:
-            return out_path.name
+            if delete_files is True:
+                os.remove(fits_file_path) 
+    
+            print(f"Extensions in {fits_file_name} has been summed to {out_path_name}\n")
+    
+            if return_full_path is True:
+                return out_path
+            else:
+                return out_path.name
 
     def sum_fits_files(self, image_collection, out_path = None, delete_files = False):
 
@@ -235,12 +236,13 @@ class SwiftCombine():
 
                 elif len(files) == 1:
                     summed_path = self.sum_extensions(fits_file_path = files[0], return_full_path = True)
-                    with fits.open(summed_path, mode = "update") as hdul:
-                        hdul[0].header["OBJECT"] = target_name.replace("_", " ")
-                        hdul[1].header["OBJECT"] = target_name.replace("_", " ")
-                        hdul[0].header["SUMTYP"] = "FINAL"
-                        hdul[1].header["SUMTYP"] = "FINAL"
-                        hdul.flush()
+                    if summed_path is not None:
+                        with fits.open(summed_path, mode = "update") as hdul:
+                            hdul[0].header["OBJECT"] = target_name.replace("_", " ")
+                            hdul[1].header["OBJECT"] = target_name.replace("_", " ")
+                            hdul[0].header["SUMTYP"] = "FINAL"
+                            hdul[1].header["SUMTYP"] = "FINAL"
+                            hdul.flush()
 
                 elif len(files) > 1:
                     num = len(files)

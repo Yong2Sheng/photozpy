@@ -377,7 +377,7 @@ class SwiftPhotometry():
         if self._source_catalog is not None:
             self._source_catalog = Path(self._source_catalog)
             final_catalog = pd.read_csv(self._source_catalog, sep = ",")
-            final_catalog = pd.merge(final_catalog, df_results, on='name')
+            final_catalog = pd.merge(final_catalog, df_results, on='name', how = "left")
             final_catalog.to_csv(Path("") / "mag_results.csv", index=False, mode = "w")
         else:
             df_results.to_csv(Path("") / "mag_results.csv", index=False, mode = "w")

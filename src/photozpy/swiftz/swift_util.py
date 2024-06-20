@@ -208,7 +208,7 @@ class SwiftDownload():
         # construct the new sliced dictionary by the index/indices
         for key, value in input_dict.items():
             if not isinstance(value, list):
-                raise ValueError("The value of each key must be a list to be sliced by index.")   
+                raise ValueError("The value of each key must be a list or SkyCoord to be sliced by index.")   
             else:
                 new_dict[key] = [value[i] for i in slice_index]
 
