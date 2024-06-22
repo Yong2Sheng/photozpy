@@ -183,27 +183,33 @@ class SwiftCombine():
 
         fits_file_path = image_collection.files_filtered(include_path = True)
         fits_file_names = image_collection.files_filtered(include_path = False)
-
-        # let't append the observations first before using uvotimsum
-        appended_file = Path(fits_file_path[0]).with_name(f"appended_{collection_filter}.fits")
-        shutil.copy2(fits_file_path[0], appended_file)
-        for i in fits_file_path[1:]:
-            os.system(f"fappend {i} {appended_file}")
-
-        # determine the output path
-        if out_path is None:
-            out_path = Path(fits_file_path[0]).parent / f"{collection_filter}.fits"
         
-        os.system(f"uvotimsum exclude=NONE infile={appended_file} outfile={out_path} clobber=yes cleanup=yes | tee -a uvotimsum_log.txt >/dev/null 2>&1")
+        if len(fits_file_path) > 0:
 
-        print(f"{fits_file_names} has been summed to {collection_filter}.fits\n")
-
-        # remove the files that are no longer needed.
-        if delete_files is True:
-            for i in fits_file_path + [appended_file]:
-                os.remove(i)
-
-        return out_path
+            # let't append the observations first before using uvotimsum
+            appended_file = Path(fits_file_path[0]).with_name(f"appended_{collection_filter}.fits")
+            shutil.copy2(fits_file_path[0], appended_file)
+            for i in fits_file_path[1:]:
+                os.system(f"fappend {i} {appended_file}")
+    
+            # determine the output path
+            if out_path is None:
+                out_path = Path(fits_file_path[0]).parent / f"{collection_filter}.fits"
+            
+            print(f"uvotimsum exclude=NONE infile={appended_file} outfile={out_path} clobber=yes cleanup=yes | tee -a uvotimsum_log.txt >/dev/null 2>&1")
+            os.system(f"uvotimsum exclude=NONE infile={appended_file} outfile={out_path} clobber=yes cleanup=yes | tee -a uvotimsum_log.txt >/dev/null 2>&1")
+    
+            print(f"{fits_file_names} has been summed to {collection_filter}.fits\n")
+    
+            # remove the files that are no longer needed.
+            if delete_files is True:
+                for i in fits_file_path + [appended_file]:
+                    os.remove(i)
+    
+            return out_path
+        
+        else:
+            return
 
 
     def sum_all_files(self, delete_files = False):
@@ -253,23 +259,25 @@ class SwiftCombine():
                         _out_path = Path(files[i]).parent / f"{filter_}_{i}.fits"
                         _summed = self.sum_extensions(fits_file_path = files[i], out_path = _out_path, 
                                                       delete_files = delete_files, return_full_path = False)
-                        with fits.open(_out_path, mode = "update") as hdul:
-                            hdul[0].header["OBJECT"] = target_name.replace("_", " ")
-                            hdul[1].header["OBJECT"] = target_name.replace("_", " ")
-                            hdul[0].header["SUMTYP"] = "SUMMED"
-                            hdul[1].header["SUMTYP"] = "SUMMED"
-                            hdul.flush()
-                        summed_observations += [_summed]  # collect the file path of summed observations
+                        if _summed is not None:
+                            with fits.open(_out_path, mode = "update") as hdul:
+                                hdul[0].header["OBJECT"] = target_name.replace("_", " ")
+                                hdul[1].header["OBJECT"] = target_name.replace("_", " ")
+                                hdul[0].header["SUMTYP"] = "SUMMED"
+                                hdul[1].header["SUMTYP"] = "SUMMED"
+                                hdul.flush()
+                            summed_observations += [_summed]  # collect the file path of summed observations
 
                     # sum the observations
                     _collection = ImageFileCollection(location = target_dir, filenames = summed_observations)
                     summed_path = self.sum_fits_files(image_collection = _collection, delete_files = delete_files)
-                    with fits.open(summed_path, mode = "update") as hdul:
-                        hdul[0].header["OBJECT"] = target_name.replace("_", " ")
-                        hdul[1].header["OBJECT"] = target_name.replace("_", " ")
-                        hdul[0].header["SUMTYP"] = "FINAL"
-                        hdul[1].header["SUMTYP"] = "FINAL"
-                        hdul.flush()
+                    if summed_path is not None:
+                        with fits.open(summed_path, mode = "update") as hdul:
+                            hdul[0].header["OBJECT"] = target_name.replace("_", " ")
+                            hdul[1].header["OBJECT"] = target_name.replace("_", " ")
+                            hdul[0].header["SUMTYP"] = "FINAL"
+                            hdul[1].header["SUMTYP"] = "FINAL"
+                            hdul.flush()
 
             print(f"{target_name} sum completed!")
             print("----------------------------------------------------------------\n")

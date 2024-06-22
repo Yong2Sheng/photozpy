@@ -103,17 +103,22 @@ class PhotozRegions():
         for collection in self._mcollection:
             
             collection_path = collection.location
-            print(collection_path)
+            bkg_path = Path(collection_path) / "bkg.reg"
             source_name = collection_path.parts[-1].replace("_", " ")
-            print(source_name)
+            if bkg_path.exists():
+                print(f"The bkg region file has been generated at {bkg_path}!")
                 
-            # read the source coordinate from the source catalog
-            ra = self._source_catalog_df[self._source_catalog_df["name"] == source_name]["ra"].to_numpy()[0]
-            dec = self._source_catalog_df[self._source_catalog_df["name"] == source_name]["dec"].to_numpy()[0]
-            sky_coord = SkyCoord(ra = ra, dec = dec, unit = "deg", frame = "fk5")
-            print(f"ra = {ra}, dec = {dec}")
-            
-            PhotozRegions.generate_regions(region_dir = collection_path, filter_name = "bkg", coord = sky_coord, radius = 30)
+            else:
+                print(collection_path)
+                print(source_name)
+                    
+                # read the source coordinate from the source catalog
+                ra = self._source_catalog_df[self._source_catalog_df["name"] == source_name]["ra"].to_numpy()[0]
+                dec = self._source_catalog_df[self._source_catalog_df["name"] == source_name]["dec"].to_numpy()[0]
+                sky_coord = SkyCoord(ra = ra, dec = dec, unit = "deg", frame = "fk5")
+                print(f"ra = {ra}, dec = {dec}")
+                
+                PhotozRegions.generate_regions(region_dir = collection_path, filter_name = "bkg", coord = sky_coord, radius = 30)
             
             print("---------------------------------------------------")
             
@@ -192,6 +197,7 @@ class PhotozRegions():
                 if save_image == True:
                     PhotozRegions.plot_regions(array_data = array_data, wcs = ccddata.wcs, filter_name = filter_name, source_name = source_name,
                                                src_region_path = src_region_path, bkg_region_path = bkg_region_path, 
+                                               other_coords = [sky_coord], other_coord_labels = ["original source location"],
                                                save_dir = image_path.parent, save_image = True)
             
             if aladin is True:
@@ -208,10 +214,15 @@ class PhotozRegions():
 
     @staticmethod
     def plot_regions(image_path = None, hdu = 1, array_data = None, wcs = None, filter_name = None, source_name = None, 
-                     src_region_path = None, bkg_region_path = None,
+                     src_region_path = None, bkg_region_path = None, other_coords = None, other_coord_labels = None,
                      image_cutout = ["full_image", 100, 20, 120], log_stretch = 3000, save_dir = None, save_image = False):
         """
         Plot regions
+        
+        Parameters
+        ----------
+        other_coords : list
+        other_coord_labels : list
         """
     
         tick_fontsize = 12
@@ -312,6 +323,9 @@ class PhotozRegions():
             ax.coords[1].set_axislabel('Declination (J2000)', fontsize=tick_fontsize)
             ax.tick_params(which='major', labelsize=tick_fontsize)
             ax.legend(fontsize = subplot_labelsize)
+            if other_coords is not None:
+                for coord_, label_ in zip(other_coords, other_coord_labels):
+                    ax.scatter(coord_.ra.deg, coord_.dec.deg, marker = "+", s = 10, color = "cyan", label = label_)
     
         fig.savefig(save_dir / f"{source_name}_{filter_name}.png", dpi = 300, bbox_inches = "tight")
 
