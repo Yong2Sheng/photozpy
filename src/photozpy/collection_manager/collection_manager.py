@@ -102,8 +102,8 @@ class CollectionManager():
         dict_list = CollectionManager.unwarp_dictionary(headers_values)
     
         files = []
-        for dict in dict_list:
-            files_temp = list(image_collection.files_filtered(**dict))
+        for dict_ in dict_list:
+            files_temp = list(image_collection.files_filtered(**dict_))
             files += files_temp
     
         # remove duplicate file names

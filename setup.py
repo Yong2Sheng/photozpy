@@ -26,7 +26,8 @@ setup(
         "astroalign",
         "scipy",
         "matplotlib",
-        "astroquery"
+        "astroquery",
+        "regions"
         ]
 
 )

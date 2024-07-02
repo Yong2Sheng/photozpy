@@ -80,8 +80,7 @@ class HeaderCorrection():
         light_collection = CollectionManager.filter_collection(input_collection, **{"IMTYPE": ["Light"]})
         fl_collection = ImageFileCollection(input_collection.location, 
                                             filenames = flat_collection.files + light_collection.files)
-        # note that although it only works on flat and light image, it will eventually return a image collection
-        # that contains all the original files in the input_collection
+        # note that although the filter header correction only works on flat and light image, it will eventually return a image collection that contains all the original files in the input_collection, incliding bias and dark images.
 
         for hdu, file_name in tqdm(fl_collection.hdus(overwrite = overwrite, save_location = save_location, return_fname = True)):
             if from_file_name == False:
