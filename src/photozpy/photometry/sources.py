@@ -11,7 +11,7 @@ from astropy.coordinates import SkyCoord
 
 class Sources():
 
-    def __init__(self, object = None, skycoords = None):
+    def __init__(self, object_name = None, skycoords = None):
 
         """
         Define the initial source dictionary.
@@ -30,20 +30,20 @@ class Sources():
         ## The object name is the value of the OBJECT header of the fits file.
         ## The object name is used to identify the image files.
         ## One object can correspond to multiple SkyCoords, for example, standard stars.
-        if object == None and skycoords == None:
+        if object_name == None and skycoords == None:
             self.source_dict = {"Object":[], 
                                 "SkyCoords":[]}
-        elif object != None and skycoords != None:
-            if not isinstance(object, list):
-                object = [object]
+        elif object_name != None and skycoords != None:
+            if not isinstance(object_name, list):
+                object_name = [object_name]
             if not isinstance(skycoords, list):
                 skycoords = [skycoords]
-            self.source_dict = {"Object":object, 
+            self.source_dict = {"Object":object_name, 
                                 "SkyCoords":skycoords}
         else:
             raise ValueError("Both object and skycoords should be None or not None!")
 
-    def add_object(self, object, skycoords):
+    def add_object(self, object_name, skycoords):
 
         """
         Add a new obejct and skycoords to the source dictionary
@@ -58,13 +58,13 @@ class Sources():
         source_dict
         """
 
-        if not isinstance(object, list):
-            object = [object]
+        if not isinstance(object_name, list):
+            object_name = [object_name]
 
         if not isinstance(skycoords, list):
             skycoords = [skycoords]
 
-        self.source_dict["Object"] = self.source_dict["Object"] + object
+        self.source_dict["Object"] = self.source_dict["Object"] + object_name
         self.source_dict["SkyCoords"] = self.source_dict["SkyCoords"] + skycoords
 
         return self.source_dict

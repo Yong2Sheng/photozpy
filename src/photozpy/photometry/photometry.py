@@ -199,17 +199,18 @@ class Photometry():
         self._image_collection = CollectionManager.refresh_collection(self._image_collection, rescan = True)
 
         # work on the obejct iteratively
-        for object, skycoords in zip(sources.get_objects, sources.get_skycoords):
+        for object_name, skycoords in zip(sources.get_objects, sources.get_skycoords):
 
             # get the image collection to work
             collection_photometry = CollectionManager.filter_collection(self._image_collection, 
-                                                                        **{"IMTYPE": "Master Light", "OBJECT": object})
+                                                                        **{"IMTYPE": "Master Light", "OBJECT": object_name})
             image_list = collection_photometry.files_filtered(include_path = True)
 
             for image_path in image_list:
+                image_path = Path(image_path)
                 headers = fits.getheader(image_path)
-                filter = headers["FILTER"]
-                print(f"Working on photometry of {object} in {filter} ......")
+                filter_name = headers["FILTER"]
+                print(f"Working on photometry of {object_name} in {filter_name} from {image_path.name}")
 
                 # get the aperture and annulus aperture
                 fwhm = Photometry.read_fwhm(image_path, keyword = "FWHM")
