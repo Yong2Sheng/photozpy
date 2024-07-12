@@ -243,7 +243,9 @@ class Photometry():
                     phot_table[col].info.format = '%.8g'  # for consistent table output
 
                 if verbose:
-                    print(phot_table)
+                    #nlines = len(phot_table) + 2
+                    phot_table.pprint_all()
+                    #print(phot_table)
                     print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n")
 
                 # plot the targets, photometry aperture and background annulus
