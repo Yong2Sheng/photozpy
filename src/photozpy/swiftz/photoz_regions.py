@@ -332,7 +332,87 @@ class PhotozRegions():
         plt.close()
 
         return
-            
+
+
+class CCDRegions():
+
+    def __init__(self, image_collection, telescope, sources):
+
+        # switch image_collection from ImageFileCollection to mImageFileCollection to make it standard for the pipeline
+        if isinstance(image_collection, ImageFileCollection):
+            self._mcollection = mImageFileCollection(location = image_collection.location, filenames = image_collection.files)
+
+        elif isinstance(image_collection, mImageFileCollection):
+            self._mcollection = image_collection
+
+        self._telescope = telescope
+
+        self.sources = sources
+
+
+
+
+def get_centroids(sky_coords, image_path = None, hdu = None, array_data = None, wcs = None, return_type = "pix_coord", 
+                  box_size = 51, verbose = False, centroid_method = centroid_quadratic):
+
+    """
+    Parameters
+    ----------
+
+    Returns
+    -------
+    """
+
+    hdu = 1 if hdu is None else hdu
+    
+    if image_path is not None:
+        
+        image_path = Path(image_path)
+        # read image data
+        ccddata = CCDData.read(image_path, hdu = hdu)
+        array_data = ccddata.data
+        filter_name = ccddata.header["FILTER"]
+        wcs = ccddata.wcs
+
+    # get the bkg substratced data
+    bkg, array_data_no_bkg = estimate_background(array_data = array_data)
+
+    #convert to the pixel coordinate
+    pixel_coord = convert_coords(wcs = wcs, skycoords = sky_coords, pixelcoords = None, verbose = False)
+
+    # get the centroid pixelcoords
+    x_centroids , y_centroids = centroid_sources(array_data_no_bkg, 
+                                                 pixel_coord[:,0], pixel_coord[:,1], 
+                                                 box_size = box_size, 
+                                                 centroid_func = centroid_method)
+
+    if np.isnan(x_centroids.astype(float)).any(): # check is any of the fitted pixel coordinate is NaN
+        
+        print(f"The fitting for {filter_name} using {centroid_method.__name__} failed, switch to {centroid_com.__name__} instead!")
+        
+        x_centroids , y_centroids = centroid_sources(array_data_no_bkg, 
+                                                     pixel_coord[0], pixel_coord[1], 
+                                                     box_size = box_size, 
+                                                     centroid_func = centroid_com)
+
+    if verbose == True:
+        print(f"The centroid pixel for {filter_name} is ({x_centroids},{y_centroids}).")
+    
+    # convert the centroid pixelcoords to skycoords
+    centroid_skycoord = convert_coords(wcs = ccddata.wcs, 
+                                       skycoords = None, 
+                                       pixelcoords = np.array([x_centroids,y_centroids]).T, 
+                                       verbose = False)  # the converted Skycoord is a list, so event if there is only one set skycoord, I have to use [0] to convert it from a list of skycoord to a skycoord
+
+    if return_type == "pix_coord":
+        return np.array([x_centroids,y_centroids]).T
+    elif return_type == "sky_coord":
+        return centroid_skycoord
+
+    
+
+
+    
 
                 
         

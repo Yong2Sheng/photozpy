@@ -76,4 +76,8 @@ class Sources():
     @property
     def get_skycoords(self):
         return self.source_dict["SkyCoords"]
+
+    def __getitem__(self, idx):
+
+        return (self.source_dict.get('Object')[idx], self.source_dict.get('SkyCoords')[idx])
             
