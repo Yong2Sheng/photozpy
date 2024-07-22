@@ -337,20 +337,18 @@ class PhotozRegions():
 
 class CCD_Regions():
 
-    def __init__(self, image_collection, telescope, sources):
+    def __init__(self, image_collection, sources):
 
         # switch image_collection from ImageFileCollection to mImageFileCollection to make it standard for the pipeline
         if isinstance(image_collection, ImageFileCollection):
-            self._mcollection = mImageFileCollection(location = image_collection.location, filenames = image_collection.files)
+            self._mcollection = mImageFileCollection(image_dir = image_collection.location, filenames = image_collection.files)
 
         elif isinstance(image_collection, mImageFileCollection):
             self._mcollection = image_collection
 
-        self._telescope = telescope
-
         self.sources = sources
 
-    def generate_ccd_regions(self, plot_regions = True, hdu = 0, box_size = 51*u.pixel, **kwargs):
+    def generate_ccd_regions(self, save_plots = True, hdu = 0, box_size = 51*u.pixel, **kwargs):
 
         """
         Generate the regions files for CCD analyze. It support circular and annulus regions.
@@ -372,34 +370,38 @@ class CCD_Regions():
                     image_path = Path(image_path)
                     image_parent_path = image_path.parent
                     ccddata = CCDData.read(image_path, hdu = 0)
-                    ccd_filter = ccddata.header["FILTER"]
-                    ccd_wcs = ccddata.wcs
-                    ccd_array= ccddata.data
+                    image_filter_name = ccddata.header["FILTER"]
+                    image_wcs = ccddata.wcs
+                    image_array_data= ccddata.data
                     psf_fwhm = ccddata.header["FWHM"]*u.pixel
                     aperture_radius = psf_fwhm*3
                     inner_radius = psf_fwhm*5
                     outer_radius = psf_fwhm*8
 
                     # get the centroids of the sky coodinates
-                    get_centroids(sky_coords = source_coords, array_data = ccd_array, wcs = ccd_wcs, return_type = "sky_coord", 
-                                  box_size = box_size.value, verbose = False, centroid_method = centroid_quadratic)
+                    source_coords_centroids = get_centroids(sky_coords = source_coords, array_data = image_array_data, image_wcs = image_wcs, return_type = "sky_coord", 
+                                                            box_size = int(box_size.value), verbose = False, centroid_method = centroid_quadratic)
                     
                     # get the pixel scale 
-                    x, y = wcs.utils.proj_plane_pixel_scales(ccd_wcs)*u.deg/u.pixel  # x and y are pixel scale along two axis. They are usually very close.
+                    x, y = wcs.utils.proj_plane_pixel_scales(image_wcs)*u.deg/u.pixel  # x and y are pixel scale along two axis. They are usually very close.
                     pixel_scale = u.pixel_scale(x)  # I choose x axis as the pixel scale for conversion.
                     
+                    # now the target names are generated automatically
+                    target_names = [f"S{i}" for i in np.arange(source_coords_centroids.shape[0])]
+                    
                     # generate and save the region files for source aperture and background annulus
-                    src_region_path = generate_region_files(region_save_dir = image_parent_path, field_name = source_name, source_name = source_name, filter_name = ccd_filter, 
-                                                            sky_coord = source_coords, region_type = "src", pixel_scale = pixel_scale, inner_radius = aperture_radius)
+                    src_region_path = generate_region_files(region_save_dir = image_parent_path, field_name = source_name, source_name = target_names, filter_name = image_filter_name, 
+                                                            sky_coord = source_coords_centroids, region_type = "src", pixel_scale = pixel_scale, inner_radius = aperture_radius)
                     
                     
-                    bkg_region_path = generate_region_files(region_save_dir = image_parent_path, field_name = source_name, source_name = source_name, filter_name = ccd_filter, 
-                                                            sky_coord = source_coords, region_type = "bkg", pixel_scale = pixel_scale, inner_radius = inner_radius, outer_radius = outer_radius)
+                    bkg_region_path = generate_region_files(region_save_dir = image_parent_path, field_name = source_name, source_name = target_names, filter_name = image_filter_name, 
+                                                            sky_coord = source_coords_centroids, region_type = "bkg", pixel_scale = pixel_scale, inner_radius = inner_radius, outer_radius = outer_radius)
                     
-                    
-                    
-                    aladin_result = get_alain_image(wcs = ccd_wcs, save_dir = None, sky_region = None, 
-                                                    min_cut = 0.5, max_cut = 99.5, logstretch = 10, source_name = None, hips = "CDS/P/DSS2/blue", save_image = False)
+                    # Plot regions
+                    if save_plots is True:
+                        plot_regions(image_array_data = image_array_data, image_wcs = image_wcs, image_filter_name = image_filter_name, field_name = source_name, 
+                                     src_region_path = src_region_path, bkg_region_path = bkg_region_path, aladin_image = None,
+                                     aladin_stretch = 3000, data_strentch = 5000, save_dir = image_parent_path, save_image = True)
 
 
                     
@@ -408,7 +410,7 @@ class CCD_Regions():
     
 
 def generate_region_files(region_save_dir, field_name, source_name, filter_name, 
-                         sky_coord, region_type = "src", pixel_scale = None, inner_radius = 5.0*u.pixel, outer_radius = None):
+                          sky_coord, region_type = "src", pixel_scale = None, inner_radius = 5.0*u.pixel, outer_radius = None):
 
     """
     Generate the circular region files.
@@ -469,12 +471,12 @@ def generate_region_files(region_save_dir, field_name, source_name, filter_name,
             else:
                 if outer_radius.unit.name == "pix":
                     outer_radius_angular = outer_radius.to(u.arcsec, pixel_scale).value
-                f.write(f'annulus({_ra},{_dec},{inner_radius_angular}", {outer_radius_angular}") # text={{{_name}_{region_type}}}\n')
+                f.write(f'annulus({_ra},{_dec},{inner_radius_angular}", {outer_radius_angular}") # text={{{_name}}}\n')
 
     return region_path
 
 
-def get_centroids(sky_coords=None, pixel_coords=None, image_path=None, hdu=None, array_data=None, wcs=None, filter_name=None,
+def get_centroids(sky_coords=None, pixel_coords=None, image_path=None, hdu=None, array_data=None, image_wcs=None, filter_name=None,
                   return_type = "pix_coord", box_size = 51, verbose = False, centroid_method = centroid_quadratic):
 
     """
@@ -538,16 +540,15 @@ def get_centroids(sky_coords=None, pixel_coords=None, image_path=None, hdu=None,
 
     
 
-def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs = None, image_filter_name = None, source_name = None, 
+def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs = None, image_filter_name = None, field_name = None, 
                  src_region_path = None, bkg_region_path = None, aladin_image = None,
                  image_cutout = ["full_image", 100, 20, 120], aladin_stretch = 3000, data_strentch = 5000, save_dir = None, save_image = False):
     
     if image_path is not None:
         image_path = Path(image_path)
-        image_parent_path = image_path.parent
         ccddata = CCDData.read(image_path, hdu = hdu)
         image_filter_name = ccddata.header["FILTER"]
-        source_name = ccddata.header["OBJECT"]
+        field_name = ccddata.header["OBJECT"]
         image_wcs = ccddata.wcs
         image_array_data= ccddata.data
         # determine the save location
@@ -598,7 +599,7 @@ def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs 
     
     # Create figure
     fig, axs = plt.subplots(n_subplots, 2, figsize = (15, 7.5*n_subplots), subplot_kw=dict(projection = image_wcs), constrained_layout=True)
-    fig.suptitle(f"Region summary for {image_filter_name} filter of source {source_name}", fontsize = 20)
+    fig.suptitle(f"Region summary for {image_filter_name} filter of source {field_name}", fontsize = 20)
     text_fontsize = 15
     tick_fontsize = 15
     subplot_labelsize = 15
@@ -652,7 +653,7 @@ def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs 
         ax.legend()
         
     if save_image is True:
-        fig.savefig(save_dir / f"{source_name}_{image_filter_name}_regions.png", dpi = 300, bbox_inches = "tight")
+        fig.savefig(save_dir / f"{field_name}_{image_filter_name}_regions.png", dpi = 300, bbox_inches = "tight")
         plt.close()
         
     return
