@@ -18,7 +18,7 @@ from matplotlib.colors import Colormap
 from astropy.visualization.mpl_normalize import ImageNormalize
 from astropy.visualization import LogStretch
 
-def get_alain_image(image_path = None, hdu = 1, wcs = None, save_dir = None, sky_region = None, min_cut = 0.5, max_cut = 99.5, logstretch = 10, source_name = None, hips = "CDS/P/DSS2/blue"):
+def get_alain_image(image_path = None, hdu = 1, wcs = None, save_dir = None, sky_region = None, min_cut = 0.5, max_cut = 99.5, logstretch = 10, source_name = None, hips = "CDS/P/DSS2/blue", save_image = True):
 
     """
     Get the corresponding aladin image from wcs or the image file that contains wcs.
@@ -27,8 +27,6 @@ def get_alain_image(image_path = None, hdu = 1, wcs = None, save_dir = None, sky
     if wcs is None:
         wcs = CCDData.read(image_path, hdu = hdu).wcs
 
-    if save_dir is None:
-        save_dir = Path(image_path).parent
     
     result = hips2fits.query_with_wcs(hips=hips,
                                       wcs=wcs,
@@ -38,55 +36,59 @@ def get_alain_image(image_path = None, hdu = 1, wcs = None, save_dir = None, sky
                                       max_cut=99.5,
                                       cmap=Colormap('viridis'))
 
-    x_npix = result[0].data.shape[0]
-    y_npix = result[0].data.shape[1]
+    if save_image is True:
+        if save_dir is None:
+            save_dir = Path(image_path).parent
 
-    tick_fontsize = 15
-    subplot_labelsize = 15
-    subtitle_fontsize = 15
+        x_npix = result[0].data.shape[0]
+        y_npix = result[0].data.shape[1]
     
-    fig = plt.figure(figsize = (15, 15))
-    if source_name is not None:
-        fig.suptitle(f"Aladin image summary for {source_name}", y=0.92, fontsize = 20)
-    norm = ImageNormalize(stretch=LogStretch(logstretch))
+        tick_fontsize = 15
+        subplot_labelsize = 15
+        subtitle_fontsize = 15
+        
+        fig = plt.figure(figsize = (15, 15))
+        if source_name is not None:
+            fig.suptitle(f"Region summary for {source_name}", y=0.92, fontsize = 20)
+        norm = ImageNormalize(stretch=LogStretch(logstretch))
+    
+        # plot the full image
+        ax0 = fig.add_subplot(211, projection=wcs)
+        ax0.imshow(result[0].data, origin='lower', norm=norm, cmap='Greys_r', interpolation='nearest')
+    
+        ax0.coords.grid(True, color='white', ls='dotted')
+        ax0.coords[0].set_axislabel('Right Ascension (J2000)', fontsize=tick_fontsize)
+        ax0.coords[1].set_axislabel('Declination (J2000)', fontsize=tick_fontsize)
+        ax0.tick_params(which='major', labelsize=tick_fontsize)
+        ax0.legend(fontsize = subplot_labelsize)
+    
+        if sky_region is None:
+            fig.savefig(save_dir / "Aladin_image.png", dpi = 300, bbox_inches = "tight")
+        else:
+            # if sky region is given, it will plot the sky region in the full and zoomed image.
+    
+            # plot the region in the full image
+            pixereg = sky_region.to_pixel(wcs)
+            pixereg.plot(ax = ax0, color='red', lw=0.5, label = "Source region")
+    
+            # plotted the zoomed image
+            ax1 = fig.add_subplot(212, projection=wcs)
+            ax1.imshow(result[0].data, origin='lower', norm=norm, cmap='Greys_r', interpolation='nearest')
+            pixereg.plot(ax = ax1, color='red', lw=0.5, label = "Zoomed source region")
+            ax1.set_xlim(pixereg.center.x - x_npix*0.1, pixereg.center.x + x_npix*0.1)
+            ax1.set_ylim(pixereg.center.y - y_npix*0.1, pixereg.center.y + y_npix*0.1)
+    
+            for ax in [ax0, ax1]:
+                ax.coords.grid(True, color='white', ls='dotted')
+                ax.coords[0].set_axislabel('Right Ascension (J2000)', fontsize=tick_fontsize)
+                ax.coords[1].set_axislabel('Declination (J2000)', fontsize=tick_fontsize)
+                ax.tick_params(which='major', labelsize=tick_fontsize)
+                ax.legend(fontsize = subplot_labelsize)
+    
+            fig.savefig(save_dir / "Aladin_image.png", dpi = 300, bbox_inches = "tight")
+            plt.close()
 
-    # plot the full image
-    ax0 = fig.add_subplot(211, projection=wcs)
-    ax0.imshow(result[0].data, origin='lower', norm=norm, cmap='Greys_r', interpolation='nearest')
-
-    ax0.coords.grid(True, color='white', ls='dotted')
-    ax0.coords[0].set_axislabel('Right Ascension (J2000)', fontsize=tick_fontsize)
-    ax0.coords[1].set_axislabel('Declination (J2000)', fontsize=tick_fontsize)
-    ax0.tick_params(which='major', labelsize=tick_fontsize)
-    ax0.legend(fontsize = subplot_labelsize)
-
-    if sky_region is None:
-        fig.savefig(save_dir / "Aladin_image.png", dpi = 300, bbox_inches = "tight")
-    else:
-        # if sky region is given, it will plot the sky region in the full and zoomed image.
-
-        # plot the region in the full image
-        pixereg = sky_region.to_pixel(wcs)
-        pixereg.plot(ax = ax0, color='red', lw=0.5, label = "Source region")
-
-        # plotted the zoomed image
-        ax1 = fig.add_subplot(212, projection=wcs)
-        ax1.imshow(result[0].data, origin='lower', norm=norm, cmap='Greys_r', interpolation='nearest')
-        pixereg.plot(ax = ax1, color='red', lw=0.5, label = "Zoomed source region")
-        ax1.set_xlim(pixereg.center.x - x_npix*0.1, pixereg.center.x + x_npix*0.1)
-        ax1.set_ylim(pixereg.center.y - y_npix*0.1, pixereg.center.y + y_npix*0.1)
-
-        for ax in [ax0, ax1]:
-            ax.coords.grid(True, color='white', ls='dotted')
-            ax.coords[0].set_axislabel('Right Ascension (J2000)', fontsize=tick_fontsize)
-            ax.coords[1].set_axislabel('Declination (J2000)', fontsize=tick_fontsize)
-            ax.tick_params(which='major', labelsize=tick_fontsize)
-            ax.legend(fontsize = subplot_labelsize)
-
-        fig.savefig(save_dir / "Aladin_image.png", dpi = 300, bbox_inches = "tight")
-        plt.close()
-
-    return
+    return result
 
 def estimate_background(image_path = None, array_data = None, hdu = 0, unit = None, sigma = 3, box_size = (20, 20), filter_size = (5, 5), **kwargs):
 
