@@ -9,7 +9,7 @@ Main function:
 from pathlib import Path
 from ..collection_manager import CollectionManager
 from astropy.nddata import CCDData
-from photutils.aperture import CircularAnnulus, CircularAperture, ApertureStats, aperture_photometry
+from photutils.aperture import CircularAnnulus, CircularAperture, ApertureStats, aperture_photometry, SkyCircularAperture, SkyCircularAnnulus
 from astropy.io import fits
 from astropy.nddata import CCDData
 from astropy.stats import SigmaClip
@@ -20,6 +20,8 @@ from ..mimage_collection import mImageFileCollection
 from ccdproc import ImageFileCollection
 import pandas as pd
 import os
+from astropy.coordinates import SkyCoord, concatenate
+from regions import PixCoord, CirclePixelRegion, CircleSkyRegion, Regions, CircleAnnulusSkyRegion
 
 class Photometry():
 
@@ -28,59 +30,6 @@ class Photometry():
         # refresh the full collection
         self._image_collection = CollectionManager.refresh_collection(image_collection, rescan = True)
 
-    # @staticmethod
-    # def convert_coords(image_path = None, wcs = None, skycoords = None, pixelcoords = None, verbose = False):
-
-    #     """
-    #     Takes a fits file or the astropy.wcs.WCS object as input. 
-    #     Convert the sky coordinates to the pixel coordinates or vice versa.
-
-    #     Parameters
-    #     ----------
-    #     file: str or path.Path object; the path to the object
-    #     wcs: the astropy.wcs.WCS object. If both were input, wcs will cover the file.
-    #     skycoords: astropy.Skycoord object. The sky coordinate of the object
-    #     pixelcoords: 2D numpy array; the pixel coordinate of the object, the first column is the x pixels and the second is the y pixels: [[x pixles],[y pixels]]
-
-    #     Returns
-    #     -------
-    #     astropy.Skycoords or list
-    #     """
-
-    #     # check if the number of input satistifies the calculation
-
-    #     if image_path == None and wcs == None:
-    #         raise TypeError("You must give a file path or asrtropy.wcs.WCS obkect as the input!")
-
-    #     if skycoords == None and pixelcoords == None:
-    #         raise TypeError("You must give sky coordinates or pixel coordinates as the input!")
-
-    #     elif skycoords != None and pixelcoords != None:
-    #         raise TypeError("Please only input the sky coordinates or the pixel coordinates!")
-
-    #     # Read the file and get the wcs object
-    #     if wcs != None:
-    #         wcs_object = wcs
-    #     else:
-    #         data = CCDData.read(image_path, unit = "adu")
-    #         wcs_object = data.wcs
-
-    #     if skycoords != None and pixelcoords == None:
-    #         pixelcoords = data.wcs.world_to_pixel(skycoords)
-    #         pixelcoords = np.array((pixelcoords)).T # transfer the array so it's ra/dec in each column
-    #         out = pixelcoords # output variable
-    #         if verbose == True:
-    #             print("Conversion from sky coordiantes to pixel coordinates completed!")
-
-    #     elif skycoord == None and pixelcoord != None:
-    #         xpixel_coords = pixelcoord[0]
-    #         ypixel_coords = pixelcoord[1]
-    #         radec = data.wcs.pixel_to_world(xpixels, ypixel_coords)
-    #         out = radec
-    #         if verbose == True:
-    #             print("Conversion from pixel coordinates to sky coordinates completed!")
-
-    #     return out
 
     @staticmethod
     def read_fwhm(image_path, keyword = "FWHM"):
@@ -131,7 +80,7 @@ class Photometry():
         
     
     @staticmethod
-    def get_background(image_path, annulus_aperture, sigma = 3, fwhm = None):
+    def get_background(image_array_data, annulus_aperture, sigma = 3):
 
         """
         Estimate the background within the annulus using sigma-clipped median.
@@ -146,16 +95,11 @@ class Photometry():
         bkg
         """
 
-        if fwhm == None:
-            # get the fwhm
-            fwhm = Photometry.read_fwhm(image_path)
-
         # setup sigma clip
         sigclip = SigmaClip(sigma = sigma, maxiters = 10)
 
         # get the sigma_clipped median bkg
-        data = CCDData.read(image_path)
-        bkg_stats = ApertureStats(data, annulus_aperture, sigma_clip=sigclip)
+        bkg_stats = ApertureStats(image_array_data, annulus_aperture, sigma_clip=sigclip)
 
         return bkg_stats.median
 
@@ -178,7 +122,20 @@ class Photometry():
 
         return mag
     
-    def aperture_photometry(self, sources, bkg_clip_sigma = 3, verbose = True, fhwm_aper_factor = 3.0):
+    @staticmethod
+    def region2aperture(regions):
+    
+        if isinstance(regions[0], CircleSkyRegion):
+            centers = concatenate([region.center for region in regions])
+            return SkyCircularAperture(centers, regions[0].radius)
+            
+        elif isinstance(regions[0], CircleAnnulusSkyRegion):
+            centers = concatenate([region.center for region in regions])
+            return SkyCircularAnnulus(centers, r_in = regions[0].inner_radius, r_out = regions[0].outer_radius)
+            
+        
+    
+    def run_photometry(self, sources, bkg_clip_sigma = 3, hdu = 0, verbose = True):
 
         """
         Does the aperture photometry on the skycoords.
@@ -199,35 +156,46 @@ class Photometry():
         self._image_collection = CollectionManager.refresh_collection(self._image_collection, rescan = True)
 
         # work on the obejct iteratively
-        for object_name, skycoords in zip(sources.get_objects, sources.get_skycoords):
+        for source_name, source_coords in sources:
 
             # get the image collection to work
             collection_photometry = CollectionManager.filter_collection(self._image_collection, 
-                                                                        **{"IMTYPE": "Master Light", "OBJECT": object_name})
+                                                                        **{"IMTYPE": "Master Light", "OBJECT": source_name})
             image_list = collection_photometry.files_filtered(include_path = True)
 
             for image_path in image_list:
                 image_path = Path(image_path)
-                headers = fits.getheader(image_path)
-                filter_name = headers["FILTER"]
-                print(f"Working on photometry of {object_name} in {filter_name} from {image_path.name}")
+                ccdddata = CCDData.read(image_path, hdu = hdu)
+                image_headers = fits.getheader(image_path)
+                image_filter_name = image_headers["FILTER"]
+                image_wcs = ccddata.wcs
+                image_array_data = ccddata.data
+                print(f"Working on photometry of {source_name} in {image_filter_name} from {image_path.name}")
 
                 # get the aperture and annulus aperture
-                fwhm = Photometry.read_fwhm(image_path, keyword = "FWHM")
-                xy_coords = convert_coords(image_path = image_path, skycoords = skycoords)
-                xycentroids = Photometry.get_aper_centroid(image_path = image_path, xy_coords = xy_coords, fwhm = fwhm)
-                apertures = CircularAperture(xycentroids, r=fhwm_aper_factor*fwhm)
-                annlus_apertures = CircularAnnulus(xycentroids, r_in=5*fwhm, r_out=8*fwhm)
-
+            
+                src_region_fname = image_path.parent / f"{source_name}_{image_filter_name}_src.reg"
+                if not src_region_fname.exists():
+                    raise OSError(f"{src_region_fname} not found!")
+                else:
+                    src_regions = Photometry.region2aperture(src_region_fname)
+                    src_apertures = src_regions.to_pixel(image_wcs)
+                    
+                bkg_region_fname = image_path.parent / f"{source_name}_{image_filter_name}_bkg.reg"
+                if not bkg_region_fname.exists():
+                    raise OSError(f"{bkg_region_fname} not found!")
+                else:
+                    bkg_regions = Photometry.region2aperture(bkg_region_fname)
+                    bkg_annulus = bkg_regions.to_pixel(image_wcs)
+                
                 # get the sigma_clipped background estimation for all the annulus apertures
-                bkgs = Photometry.get_background(image_path, annlus_apertures, sigma = bkg_clip_sigma, fwhm = None)
+                bkgs = Photometry.get_background(image_array_data = image_array_data, annulus_aperture = bkg_annulus, sigma = bkg_clip_sigma)
 
                 # perform aperture photometry
-                data = CCDData.read(image_path)
-                phot_table = aperture_photometry(data, apertures)
+                phot_table = aperture_photometry(ccddata.data, src_apertures)
 
                 # substract the background from the photometry
-                total_bkgs = bkgs * apertures.area
+                total_bkgs = bkgs * src_apertures.area
                 phot_bkgsub = phot_table['aperture_sum'] - total_bkgs
 
                 # calculate the instrumental magnitude

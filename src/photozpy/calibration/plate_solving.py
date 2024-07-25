@@ -21,7 +21,7 @@ class PlateSolving():
         self._image_collection = CollectionManager.refresh_collection(image_collection, rescan = True)
 
 
-    def add_wcs(self, api, image_type = "Master Light", fwhm = None, detect_threshold = 5):
+    def add_wcs(self, api, image_type = "Master Light", fwhm = None, detect_threshold = 5, solve_timeout = 120):
 
         # refresh the full collection
         self._image_collection = CollectionManager.refresh_collection(self._image_collection, rescan = True)
@@ -38,7 +38,7 @@ class PlateSolving():
             image_file = Path(image).name
             ast = AstrometryNet()
             ast.api_key = api
-            wcs_header = ast.solve_from_image(image, fwhm = fwhm, detect_threshold=detect_threshold)#, verbose = False)
+            wcs_header = ast.solve_from_image(image, fwhm = fwhm, detect_threshold=detect_threshold, solve_timeout = solve_timeout)#, verbose = False)
             plate_solved_wcs_header = WCS(wcs_header).to_header()
             
             with fits.open(image, mode = "update") as hdul:

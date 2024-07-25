@@ -17,6 +17,7 @@ from astroquery.hips2fits import hips2fits
 from matplotlib.colors import Colormap
 from astropy.visualization.mpl_normalize import ImageNormalize
 from astropy.visualization import LogStretch
+from astropy.coordinates import SkyCoord, concatenate
 
 def get_alain_image(image_path = None, hdu = 1, wcs = None, save_dir = None, sky_region = None, min_cut = 0.5, max_cut = 99.5, logstretch = 10, source_name = None, hips = "CDS/P/DSS2/blue", save_image = True):
 
@@ -259,6 +260,8 @@ def convert_coords(image_path = None, wcs = None, skycoords = None, pixelcoords 
         pixelcoords = wcs_object.world_to_pixel(skycoords)
         pixelcoords = np.array((pixelcoords)).T # transfer the array so it's ra/dec in each column
         out = pixelcoords # output variable
+        if out.ndim == 1:
+            out = out.reshape(1,2)  # if the input skycoord only has one pair of coordinates, it will return an 1D array [573.8259494 ,  72.66086389] instead of 2D array [[573.8259494 ,  72.66086389]]
         if verbose == True:
             print("Conversion from sky coordiantes to pixel coordinates completed!")
 

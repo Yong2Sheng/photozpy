@@ -382,6 +382,8 @@ class CCD_Regions():
                     source_coords_centroids = get_centroids(sky_coords = source_coords, array_data = image_array_data, image_wcs = image_wcs, return_type = "sky_coord", 
                                                             box_size = int(box_size.value), verbose = False, centroid_method = centroid_quadratic)
                     
+                    print(f"{source_name} in {image_filter_name} has centroid coordinates {source_coords_centroids}")
+                    
                     # get the pixel scale 
                     x, y = wcs.utils.proj_plane_pixel_scales(image_wcs)*u.deg/u.pixel  # x and y are pixel scale along two axis. They are usually very close.
                     pixel_scale = u.pixel_scale(x)  # I choose x axis as the pixel scale for conversion.
@@ -402,6 +404,8 @@ class CCD_Regions():
                         plot_regions(image_array_data = image_array_data, image_wcs = image_wcs, image_filter_name = image_filter_name, field_name = source_name, 
                                      src_region_path = src_region_path, bkg_region_path = bkg_region_path, aladin_image = None,
                                      aladin_stretch = 3000, data_strentch = 5000, save_dir = image_parent_path, save_image = True)
+                        
+        return
 
 
                     
@@ -520,7 +524,7 @@ def get_centroids(sky_coords=None, pixel_coords=None, image_path=None, hdu=None,
         print(f"The fitting for {filter_name} using {centroid_method.__name__} failed, switch to {centroid_com.__name__} instead!")
         
         x_centroids , y_centroids = centroid_sources(array_data_no_bkg, 
-                                                     pixel_coords[0], pixel_coords[1], 
+                                                     pixel_coords[:,0], pixel_coords[:,1], 
                                                      box_size = box_size, 
                                                      centroid_func = centroid_com)
 
