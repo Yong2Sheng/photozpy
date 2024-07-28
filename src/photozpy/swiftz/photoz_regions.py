@@ -25,6 +25,7 @@ from regions import CircleSkyRegion, Regions
 import warnings
 warnings.simplefilter("ignore", UserWarning)
 import astropy.wcs as wcs
+import copy
 
 class PhotozRegions():
 
@@ -480,11 +481,12 @@ def generate_region_files(region_save_dir, field_name, source_name, filter_name,
     return region_path
 
 
-def get_centroids(sky_coords=None, pixel_coords=None, image_path=None, hdu=None, array_data=None, image_wcs=None, filter_name=None,
-                  return_type = "pix_coord", box_size = 51, verbose = False, centroid_method = centroid_quadratic):
+# The original centroid function
+def get_centroids(sky_coords = None, pixel_coords = None, image_path = None, hdu = None, array_data = None, image_wcs = None, filter_name = None,
+                  niters = 3, return_type = "pix_coord", box_size = 51, verbose = False, centroid_method = centroid_quadratic):
 
     """
-    Find the centroids of the sources.
+    Find the centroids of the sources via the i
     
     Parameters
     ----------
@@ -513,33 +515,59 @@ def get_centroids(sky_coords=None, pixel_coords=None, image_path=None, hdu=None,
         #convert to the pixel coordinate
         pixel_coords = convert_coords(wcs = image_wcs, skycoords = sky_coords, pixelcoords = None, verbose = False)
 
-    # get the centroid pixelcoords
+    pixel_coords_ = copy.deepcopy(pixel_coords)  # pixel_coords
+    
+    iters = 1
+    while iters < niters:
+
+        x_centroids_ , y_centroids_ = centroid_sources(array_data_no_bkg, 
+                                                       pixel_coords_[:,0], pixel_coords_[:,1], 
+                                                       box_size = box_size, 
+                                                       centroid_func = centroid_com)
+        
+        pixel_coords_ = np.array([x_centroids_, y_centroids_]).T
+
+        iters += 1
+
+    # use other methods other than centroid_com for the final fit
     x_centroids , y_centroids = centroid_sources(array_data_no_bkg, 
-                                                 pixel_coords[:,0], pixel_coords[:,1], 
+                                                 pixel_coords_[:,0], pixel_coords_[:,1], 
                                                  box_size = box_size, 
                                                  centroid_func = centroid_method)
 
-    if np.isnan(x_centroids.astype(float)).any(): # check is any of the fitted pixel coordinate is NaN
+    #print(np.array([x_centroids,y_centroids]).T)
+    # check if the final fit fails
+    idx_refit = np.argwhere(np.isnan(x_centroids)).flatten()
+    #print(idx_refit)
+    
+    if idx_refit.size != 0:  # refit the failed coordinates only
+        sky_coords_refit = sky_coords[idx_refit]
+        pixel_coords_refit = pixel_coords_[idx_refit]
+        #print(pixel_coords_refit)
+        print(f"The centroid fit FAILED for the following coordinate using {centroid_method.__name__}: {sky_coords_refit}!")
+        print(f"Switch to {centroid_com.__name__}.")
         
-        print(f"The fitting for {filter_name} using {centroid_method.__name__} failed, switch to {centroid_com.__name__} instead!")
+        x_centroids_refit , y_centroids_refit = centroid_sources(array_data_no_bkg, 
+                                                                 pixel_coords_refit[:,0], pixel_coords_refit[:,1], 
+                                                                 box_size = box_size, 
+                                                                 centroid_func = centroid_com)
         
-        x_centroids , y_centroids = centroid_sources(array_data_no_bkg, 
-                                                     pixel_coords[:,0], pixel_coords[:,1], 
-                                                     box_size = box_size, 
-                                                     centroid_func = centroid_com)
+        for idx, x, y in zip(idx_refit, x_centroids_refit, y_centroids_refit):
+            x_centroids[idx] = x
+            y_centroids[idx] = y
 
     if verbose == True:
         print(f"The centroid pixel for {filter_name} is ({x_centroids},{y_centroids}).")
     
-    # convert the centroid pixelcoords to skycoords
-    centroid_skycoord = convert_coords(wcs = image_wcs, 
-                                       skycoords = None, 
-                                       pixelcoords = np.array([x_centroids,y_centroids]).T, 
-                                       verbose = False)  # the converted Skycoord is a list, so event if there is only one set skycoord, I have to use [0] to convert it from a list of skycoord to a skycoord
-
     if return_type == "pix_coord":
         return np.array([x_centroids,y_centroids]).T
+        
     elif return_type == "sky_coord":
+        # convert the centroid pixelcoords to skycoords
+        centroid_skycoord = convert_coords(wcs = image_wcs, 
+                                           skycoords = None, 
+                                           pixelcoords = np.array([x_centroids,y_centroids]).T, 
+                                           verbose = False)  # the converted Skycoord is a list, so event if there is only one set skycoord, I have to use [0] to convert it from a list of skycoord to a skycoord
         return centroid_skycoord
 
     
@@ -615,19 +643,24 @@ def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs 
         aladin_result = get_alain_image(wcs = image_wcs, save_image=False)
     axs[0,0].imshow(aladin_result[0].data, origin='lower', norm = ImageNormalize(data = aladin_result[0].data, stretch = LogStretch(aladin_stretch)), cmap='Greys_r', interpolation='nearest')
     axs[0,0].set_title('Aladin Image', fontsize = subtitle_fontsize)
+    if bkg_pixel_regions[0] is not None:  # use bkg region to show and lable the sources as the first option since it has larger radius and easier to see
+        for bkg_region in bkg_pixel_regions: 
+            bkg_region.plot(ax = axs[0,0], lw=1.0, label = bkg_region.meta["text"], color = np.random.rand(3,))
+            axs[0,0].text(bkg_region.center.x, bkg_region.center.y, bkg_region.meta["text"], color = "white", size = text_fontsize)
+            axs[0,0].set_title("Data Image", fontsize = subtitle_fontsize)
     
     # plot the first raw: data image
     axs[0,1].imshow(image_array_data, origin='lower', norm = ImageNormalize(data = image_array_data, stretch = LogStretch(data_strentch)), cmap='Greys_r', interpolation='nearest')
+    axs[0,1].set_title("Data Image", fontsize = subtitle_fontsize)
     if bkg_pixel_regions[0] is not None:  # use bkg region to show and lable the sources as the first option since it has larger radius and easier to see
         for bkg_region in bkg_pixel_regions: 
             bkg_region.plot(ax = axs[0,1], lw=1.0, label = bkg_region.meta["text"], color = np.random.rand(3,))
             axs[0,1].text(bkg_region.center.x, bkg_region.center.y, bkg_region.meta["text"], color = "white", size = text_fontsize)
-            axs[0,1].set_title("Data Image", fontsize = subtitle_fontsize)
+   
     else:
         for src_region in src_pixel_regions: # src region is the second option
             src_region.plot(ax = axs[0,1], lw=1.0, label = src_region.meta["text"], color = np.random.rand(3,))
             axs[0,1].text(src_region.center.x, src_region.center.y, src_region.meta["text"], color = "white", size = text_fontsize)
-            axs[0,1].set_title("Data Image", fontsize = subtitle_fontsize)
         
     # start plotting the regions
     for src_region, bkg_region, idx in zip(src_pixel_regions, bkg_pixel_regions, np.arange(1, n_subplots)):
