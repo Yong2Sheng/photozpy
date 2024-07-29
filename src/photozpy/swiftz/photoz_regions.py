@@ -404,6 +404,7 @@ class CCD_Regions():
                     if save_plots is True:
                         plot_regions(image_array_data = image_array_data, image_wcs = image_wcs, image_filter_name = image_filter_name, field_name = source_name, 
                                      src_region_path = src_region_path, bkg_region_path = bkg_region_path, aladin_image = None,
+                                     additional_coords = source_coords, additional_coords_labels = "raw coordiante", 
                                      aladin_stretch = 3000, data_strentch = 5000, save_dir = image_parent_path, save_image = True)
                         
         return
@@ -573,8 +574,21 @@ def get_centroids(sky_coords = None, pixel_coords = None, image_path = None, hdu
     
 
 def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs = None, image_filter_name = None, field_name = None, 
-                 src_region_path = None, bkg_region_path = None, aladin_image = None,
+                 src_region_path = None, bkg_region_path = None, aladin_image = None, 
+                 additional_coords = None, additional_coords_labels = None, 
                  image_cutout = ["full_image", 100, 20, 120], aladin_stretch = 3000, data_strentch = 5000, save_dir = None, save_image = False):
+    
+    """
+    
+    Parameters
+    ----------
+    additional_coords : astropy.coordinates.SkyCoord
+        The additional sky cooridnates to plot. They will be plotted as scattered crosses.
+    additional_coords_labels : str or lists
+        The labels for the additional sky coordinates.
+    
+    
+    """
     
     if image_path is not None:
         image_path = Path(image_path)
@@ -638,13 +652,31 @@ def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs 
     subtitle_fontsize = 15
     marker_size = 10
     
+    # prepare the additional coordiantes and labels
+    if additional_coords is not None:
+        plot_additional_coords = True
+        sky_region_additional = [CircleSkyRegion(i, 5*u.arcsec) for i in additional_coords]  # Since I just want to plot the centers, the radius 5 arcsec is my random choice
+        pix_region_additional = [i.to_pixel(image_wcs) for i in sky_region_additional]
+        
+        if additional_coords_labels is None:
+            additional_coords_labels = ["additional coordinates"]*len(pix_region_additional)
+        elif isinstance(additional_coords_labels, str):
+            additional_coords_labels = [additional_coords_labels]*len(pix_region_additional)
+        elif isinstance(additional_coords_labels, list):
+            if len(additional_coords_labels) != len(pix_region_additional):
+                raise ValueError("The number of additional coordinates is not equal to the number of labels for the additional coordinates!") 
+        else:
+            raise ValueError("The accepted labels for the additional coodinates are string or list!")
+    else:
+        plot_additional_coords = False
+    
     # plot the first raw: aladin image
     if aladin_image is None:
         aladin_result = get_alain_image(wcs = image_wcs, save_image=False)
     axs[0,0].imshow(aladin_result[0].data, origin='lower', norm = ImageNormalize(data = aladin_result[0].data, stretch = LogStretch(aladin_stretch)), cmap='Greys_r', interpolation='nearest')
     axs[0,0].set_title('Aladin Image', fontsize = subtitle_fontsize)
     if bkg_pixel_regions[0] is not None:  # use bkg region to show and lable the sources as the first option since it has larger radius and easier to see
-        for bkg_region in bkg_pixel_regions: 
+        for idx, bkg_region in enumerate(bkg_pixel_regions): 
             bkg_region.plot(ax = axs[0,0], lw=1.0, label = bkg_region.meta["text"], color = np.random.rand(3,))
             axs[0,0].text(bkg_region.center.x, bkg_region.center.y, bkg_region.meta["text"], color = "white", size = text_fontsize)
             axs[0,0].set_title("Data Image", fontsize = subtitle_fontsize)
@@ -663,7 +695,9 @@ def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs 
             axs[0,1].text(src_region.center.x, src_region.center.y, src_region.meta["text"], color = "white", size = text_fontsize)
         
     # start plotting the regions
-    for src_region, bkg_region, idx in zip(src_pixel_regions, bkg_pixel_regions, np.arange(1, n_subplots)):
+    for src_region, bkg_region, idx, idx_regs in zip(src_pixel_regions, bkg_pixel_regions, np.arange(1, n_subplots), np.arange(0, len(src_pixel_regions))):
+        # idx: the index of the rows of the subplots, it starts from 1 to the number of the rows of the subplots
+        # idx_regs: the index of the regions, it stars from 0 to the number of regions
         
         if src_region is not None:
             axs[idx,0].imshow(image_array_data, origin='lower', norm = ImageNormalize(data = image_array_data, stretch = LogStretch(data_strentch)), cmap='Greys_r', interpolation='nearest')
@@ -672,13 +706,22 @@ def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs 
             axs[idx,0].set_xlim(src_region.center.x - image_array_data.shape[0]*0.05, src_region.center.x + image_array_data.shape[0]*0.05)
             axs[idx,0].set_ylim(src_region.center.y - image_array_data.shape[1]*0.05, src_region.center.y + image_array_data.shape[1]*0.05)
             axs[idx,0].set_title(f"Source Region for {src_region.meta['text']}", fontsize = subtitle_fontsize)
+            if plot_additional_coords is True:
+                axs[idx,0].scatter(pix_region_additional[idx_regs].center.x, 
+                                   pix_region_additional[idx_regs].center.y, 
+                                   marker = "+", s = marker_size, color = "orange", label = additional_coords_labels[idx_regs])
         
         if bkg_region is not None:
             axs[idx,1].imshow(image_array_data, origin='lower', norm = ImageNormalize(data = image_array_data, stretch = LogStretch(data_strentch)), cmap='Greys_r', interpolation='nearest')
+            axs[idx,1].scatter(bkg_region.center.x, bkg_region.center.y, marker = "+", s = marker_size, color = "red", label = f"{bkg_region.meta['text']} bakcground center")
             bkg_region.plot(ax = axs[idx,1], color='red', lw=1.0, label =  f"{bkg_region.meta['text']} bakcground annulus")
             axs[idx,1].set_xlim(bkg_region.center.x - image_array_data.shape[0]*0.05, bkg_region.center.x + image_array_data.shape[0]*0.05)
             axs[idx,1].set_ylim(bkg_region.center.y - image_array_data.shape[1]*0.05, bkg_region.center.y + image_array_data.shape[1]*0.05)
             axs[idx,1].set_title(f"Background Region for {bkg_region.meta['text']}", fontsize = subtitle_fontsize)
+            if plot_additional_coords is True:
+                axs[idx,1].scatter(pix_region_additional[idx_regs].center.x, 
+                                   pix_region_additional[idx_regs].center.y, 
+                                   marker = "+", s = marker_size, color = "orange", label = additional_coords_labels[idx_regs])
             
     # create RA Dec grids
     for ax in axs.flatten():

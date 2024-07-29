@@ -118,7 +118,7 @@ class Photometry():
         -------
         mag: float; magnitude
         """
-        mag = -2.5*np.log10(counts.to_value()) + c_const
+        mag = -2.5*np.log10(counts) + c_const
 
         return mag
     
@@ -165,8 +165,8 @@ class Photometry():
 
             for image_path in image_list:
                 image_path = Path(image_path)
-                ccdddata = CCDData.read(image_path, hdu = hdu)
-                image_headers = fits.getheader(image_path)
+                ccddata = CCDData.read(image_path, hdu = hdu)
+                image_headers = ccddata.header
                 image_filter_name = image_headers["FILTER"]
                 image_wcs = ccddata.wcs
                 image_array_data = ccddata.data
@@ -178,28 +178,30 @@ class Photometry():
                 if not src_region_fname.exists():
                     raise OSError(f"{src_region_fname} not found!")
                 else:
-                    src_regions = Photometry.region2aperture(src_region_fname)
-                    src_apertures = src_regions.to_pixel(image_wcs)
+                    src_regions = Regions.read(src_region_fname, format='ds9')
+                    src_apertures_sky = Photometry.region2aperture(src_regions)
+                    src_apertures_pix = src_apertures_sky.to_pixel(image_wcs)
                     
                 bkg_region_fname = image_path.parent / f"{source_name}_{image_filter_name}_bkg.reg"
                 if not bkg_region_fname.exists():
                     raise OSError(f"{bkg_region_fname} not found!")
                 else:
-                    bkg_regions = Photometry.region2aperture(bkg_region_fname)
-                    bkg_annulus = bkg_regions.to_pixel(image_wcs)
+                    bkg_regions = Regions.read(bkg_region_fname, format='ds9')
+                    bkg_regions_sky = Photometry.region2aperture(bkg_regions)
+                    bkg_annulus_pix = bkg_regions_sky.to_pixel(image_wcs)
                 
                 # get the sigma_clipped background estimation for all the annulus apertures
-                bkgs = Photometry.get_background(image_array_data = image_array_data, annulus_aperture = bkg_annulus, sigma = bkg_clip_sigma)
+                bkgs = Photometry.get_background(image_array_data = image_array_data, annulus_aperture = bkg_annulus_pix, sigma = bkg_clip_sigma)
 
                 # perform aperture photometry
-                phot_table = aperture_photometry(ccddata.data, src_apertures)
+                phot_table = aperture_photometry(ccddata.data, src_apertures_pix)
 
                 # substract the background from the photometry
-                total_bkgs = bkgs * src_apertures.area
+                total_bkgs = bkgs * src_apertures_pix.area
                 phot_bkgsub = phot_table['aperture_sum'] - total_bkgs
 
                 # calculate the instrumental magnitude
-                m_inst = Photometry.counts2mag(phot_bkgsub)
+                m_inst = Photometry.counts2mag(phot_bkgsub.value)
 
                 # organize the Qtable
                 phot_table['total_bkg'] = total_bkgs  # add the column for total background
@@ -215,16 +217,6 @@ class Photometry():
                     phot_table.pprint_all()
                     #print(phot_table)
                     print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n")
-
-                # plot the targets, photometry aperture and background annulus
-                _ = plot_image(fits_path = image_path, 
-                               save_location = None,
-                               skycoords = skycoords, 
-                               pixelcoords = None, 
-                               circular_apertures = apertures, 
-                               annulus_apertures = annlus_apertures,
-                               adjust_fov = True,
-                               fname_append = "_apertures")
 
 
         return
