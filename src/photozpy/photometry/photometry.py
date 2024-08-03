@@ -171,6 +171,7 @@ class Photometry():
                 image_wcs = ccddata.wcs
                 image_array_data = ccddata.data
                 print(f"Working on photometry of {source_name} in {image_filter_name} from {image_path.name}")
+                print("-------------------------------------------------------------------------------------------------")
 
                 # get the aperture and annulus aperture
             
@@ -198,19 +199,30 @@ class Photometry():
 
                 # substract the background from the photometry
                 total_bkgs = bkgs * src_apertures_pix.area
-                phot_bkgsub = phot_table['aperture_sum'] - total_bkgs
+                phot_table['aperture_sum'].name = "src+bkg"
+                phot_bkgsub = phot_table['src+bkg'] - total_bkgs
+                phot_bkgsub_error = np.sqrt(phot_table['src+bkg'].value + total_bkgs)
 
                 # calculate the instrumental magnitude
                 m_inst = Photometry.counts2mag(phot_bkgsub.value)
+                m_inst_error = (2.5/np.log(10))*(phot_bkgsub_error/phot_bkgsub.value)
 
                 # organize the Qtable
-                phot_table['total_bkg'] = total_bkgs  # add the column for total background
-                phot_table['aperture_sum_bkgsub'] = phot_bkgsub  # add the column for bkg substracted photometry
+                phot_table['bkg'] = total_bkgs  # add the column for total background
+                phot_table['src'] = phot_bkgsub  # add the column for bkg substracted photometry
+                phot_table['src_error'] = phot_bkgsub_error
                 phot_table['mag_inst'] = m_inst  # add the column for instrumental magnitude
-                
+                phot_table['mag_inst_error'] = m_inst_error
+
+                phot_table['src+bkg'].unit = u.ct
+                phot_table['bkg'].unit = u.ct
+                phot_table['src'].unit = u.ct
+                phot_table['src_error'].unit = u.ct
+                phot_table['mag_inst'].unit = u.mag
+                phot_table['mag_inst_error'].unit = u.mag
                 
                 for col in phot_table.colnames:
-                    phot_table[col].info.format = '%.8g'  # for consistent table output
+                    phot_table[col].info.format = '%.4f'  # for consistent table output
 
                 if verbose:
                     #nlines = len(phot_table) + 2
