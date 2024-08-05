@@ -10,6 +10,7 @@ This is the extension of astropy.ccdproc.ImageFileCollection to fit the needs fo
 from ccdproc import ImageFileCollection
 from pathlib import Path
 from astropy.io import fits
+import numpy as np
 
 class mImageFileCollection():
     
@@ -46,6 +47,8 @@ class mImageFileCollection():
         elif isinstance(image_dir, list):
             self.image_dir = [Path(i) for i in image_dir]
             self.ncollection = len(self.image_dir)
+            
+        self.find_fits_by_reading = find_fits_by_reading
 
         
         # create image collection(s)
@@ -116,7 +119,7 @@ class mImageFileCollection():
             The values of the header
         """
 
-        return image_collection.values(header, unique = True)
+        pass
 
     def refresh_collections(self, index = None):
 
@@ -125,11 +128,28 @@ class mImageFileCollection():
 
         Paremeters
         ----------
-        index : int, optional
+        index : int or list optional
             The index of the collection to be refreshed. (the default is `None`, which means all the collections will be refreshed).
 
         """
-        pass
+        if index is None:
+            index = np.arange(self.ncollection)
+        elif isinstance(index, int):
+            index = list(index)
+        
+        for i in index:
+            self.mcollection[i] = ImageFileCollection(location = self.image_dir[i], 
+                                                      keywords = self.mcollection[i].keywords,
+                                                      find_fits_by_reading = self.find_fits_by_reading, 
+                                                      glob_include = self.mcollection[i].glob_include, 
+                                                      glob_exclude = self.mcollection[i].glob_exclude, 
+                                                      ext = self.mcollection[i].ext)
+        return
+            
+    @property
+    def shape(self):
+        
+        return self.ncollection
 
 
     @staticmethod
@@ -157,28 +177,28 @@ class mImageFileCollection():
 
         return values_list
 
-    def get_collection_header_values(self, headers, index = None, unique = True):
+    # def get_collection_header_values(self, headers, index = None, unique = True):
 
-        if isinstance(headers, str):
-            headers = [headers]
+    #     if isinstance(headers, str):
+    #         headers = [headers]
 
-        file_paths = image_collection.files_filtered(include_path = True)
+    #     file_paths = image_collection.files_filtered(include_path = True)
 
-        if index is not None:
-            _collection = self.mcollection[index]
-            header_values = mImageFileCollection._get_header_values(_collection, headers = headers)
+    #     if index is not None:
+    #         _collection = self.mcollection[index]
+    #         header_values = mImageFileCollection._get_header_values(_collection, headers = headers)
 
-        else:
-            header_values = []
-            for i in np.arange(self.ncollection):
-                _collection = self.mcollection[i]
-                _header_values = mImageFileCollection._get_header_values(_collection, headers = headers)
-                header_values += _header_values
+    #     else:
+    #         header_values = []
+    #         for i in np.arange(self.ncollection):
+    #             _collection = self.mcollection[i]
+    #             _header_values = mImageFileCollection._get_header_values(_collection, headers = headers)
+    #             header_values += _header_values
                 
-        if unique:
-            header_values = [*set(header_values)]
+    #     if unique:
+    #         header_values = [*set(header_values)]
 
-        return header_values
+    #     return header_values
         
                     
 

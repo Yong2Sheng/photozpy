@@ -42,7 +42,8 @@ class CollectionManager():
                                                        filenames = image_collection.files)
         elif rescan == True:
             new_image_collection = ImageFileCollection(location = Path(image_collection.location), 
-                                                       glob_include = "*.fits")
+                                                       glob_include = "*.fits", 
+                                                       glob_exclude = ".*.fits")
 
         return new_image_collection
 
@@ -164,8 +165,8 @@ class CollectionManager():
 
         collection_to_plot = CollectionManager.refresh_collection(image_collection, rescan = True)
         if headers_values is not {}:
-            collection_to_plot = CollectionManager.filter_collection(collection_to_plot, **headers_values)
-        fits_path_to_plot = list(collection_to_plot.files_filtered(include_path = True))
+            image_collection = CollectionManager.filter_collection(image_collection, **headers_values)
+        fits_path_to_plot = list(image_collection.files_filtered(include_path = True))
 
         for fits_path in tqdm(fits_path_to_plot):
             plot_image(fits_path = fits_path)

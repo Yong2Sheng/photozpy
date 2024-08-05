@@ -21,6 +21,7 @@ from ccdproc import ImageFileCollection
 import pandas as pd
 import os
 from astropy.coordinates import SkyCoord, concatenate
+import astropy.units as u
 from regions import PixCoord, CirclePixelRegion, CircleSkyRegion, Regions, CircleAnnulusSkyRegion
 
 class Photometry():
@@ -126,13 +127,19 @@ class Photometry():
     def region2aperture(regions):
     
         if isinstance(regions[0], CircleSkyRegion):
-            centers = concatenate([region.center for region in regions])
+            if len(regions) > 1:
+                centers = concatenate([region.center for region in regions])
+            else:
+                centers = regions[0].center # if the number of regions is one, you can't concatenate the skycoords. Just get the region center
             return SkyCircularAperture(centers, regions[0].radius)
             
         elif isinstance(regions[0], CircleAnnulusSkyRegion):
-            centers = concatenate([region.center for region in regions])
+            if len(regions) > 1:
+                centers = concatenate([region.center for region in regions])
+            else:
+                centers = regions[0].center # if the number of regions is one, you can't concatenate the skycoords. Just get the region cente
             return SkyCircularAnnulus(centers, r_in = regions[0].inner_radius, r_out = regions[0].outer_radius)
-            
+                
         
     
     def run_photometry(self, sources, bkg_clip_sigma = 3, hdu = 0, verbose = True):
@@ -154,6 +161,8 @@ class Photometry():
 
         # refresh the full collection
         self._image_collection = CollectionManager.refresh_collection(self._image_collection, rescan = True)
+        
+        tables = []
 
         # work on the obejct iteratively
         for source_name, source_coords in sources:
@@ -220,6 +229,10 @@ class Photometry():
                 phot_table['src_error'].unit = u.ct
                 phot_table['mag_inst'].unit = u.mag
                 phot_table['mag_inst_error'].unit = u.mag
+                phot_table.meta = {"object": source_name,
+                                   "filter": image_filter_name}
+                
+                tables += [phot_table]
                 
                 for col in phot_table.colnames:
                     phot_table[col].info.format = '%.4f'  # for consistent table output
@@ -231,7 +244,7 @@ class Photometry():
                     print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n")
 
 
-        return
+        return tables
 
 class SwiftPhotometry():
 
