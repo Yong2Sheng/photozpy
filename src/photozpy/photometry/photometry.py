@@ -171,7 +171,7 @@ class Photometry():
             collection_photometry = CollectionManager.filter_collection(self._image_collection, 
                                                                         **{"IMTYPE": "Master Light", "OBJECT": source_name})
             image_list = collection_photometry.files_filtered(include_path = True)
-            print(image_list)
+            #print(image_list)
 
             for image_path in image_list:
                 image_path = Path(image_path)
