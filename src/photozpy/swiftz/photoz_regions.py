@@ -576,7 +576,7 @@ def get_centroids(sky_coords = None, pixel_coords = None, image_path = None, hdu
 def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs = None, image_filter_name = None, field_name = None, 
                  src_region_path = None, bkg_region_path = None, aladin_image = None, 
                  additional_coords = None, additional_coords_labels = None, 
-                 image_cutout = ["full_image", 100, 20, 120], aladin_stretch = 3000, data_strentch = 5000, save_dir = None, save_image = False):
+                 image_cutout = ["full_image", 100, 20, 120], aladin_stretch = 3000, data_strentch = 3000, save_dir = None, save_image = False):
     
     """
     
@@ -651,6 +651,12 @@ def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs 
     subplot_labelsize = 15
     subtitle_fontsize = 15
     marker_size = 10
+
+    norm = ImageNormalize(data = image_array_data, 
+                          stretch = LogStretch(data_strentch))
+                          # vmax = image_array_data.flatten().max()*0.4,
+                          # vmin = image_array_data.flatten().min()*5, 
+                          # clip = True)
     
     # prepare the additional coordiantes and labels
     if additional_coords is not None:
@@ -673,7 +679,7 @@ def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs 
     # plot the first raw: aladin image
     if aladin_image is None:
         aladin_result = get_alain_image(wcs = image_wcs, save_image=False)
-    axs[0,0].imshow(aladin_result[0].data, origin='lower', norm = ImageNormalize(data = aladin_result[0].data, stretch = LogStretch(aladin_stretch)), cmap='Greys_r', interpolation='nearest')
+    axs[0,0].imshow(aladin_result[0].data, origin='lower', norm = norm, cmap='Greys_r', interpolation='nearest')
     axs[0,0].set_title('Aladin Image', fontsize = subtitle_fontsize)
     if bkg_pixel_regions[0] is not None:  # use bkg region to show and lable the sources as the first option since it has larger radius and easier to see
         for idx, bkg_region in enumerate(bkg_pixel_regions): 
@@ -682,7 +688,7 @@ def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs 
             axs[0,0].set_title("Data Image", fontsize = subtitle_fontsize)
     
     # plot the first raw: data image
-    axs[0,1].imshow(image_array_data, origin='lower', norm = ImageNormalize(data = image_array_data, stretch = LogStretch(data_strentch)), cmap='Greys_r', interpolation='nearest')
+    axs[0,1].imshow(image_array_data, origin='lower', norm = norm, cmap='Greys_r', interpolation='nearest')
     axs[0,1].set_title("Data Image", fontsize = subtitle_fontsize)
     if bkg_pixel_regions[0] is not None:  # use bkg region to show and lable the sources as the first option since it has larger radius and easier to see
         for bkg_region in bkg_pixel_regions: 
@@ -700,7 +706,7 @@ def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs 
         # idx_regs: the index of the regions, it stars from 0 to the number of regions
         
         if src_region is not None:
-            axs[idx,0].imshow(image_array_data, origin='lower', norm = ImageNormalize(data = image_array_data, stretch = LogStretch(data_strentch)), cmap='Greys_r', interpolation='nearest')
+            axs[idx,0].imshow(image_array_data, origin='lower', norm = norm, cmap='Greys_r', interpolation='nearest')
             axs[idx,0].scatter(src_region.center.x, src_region.center.y, marker = "+", s = marker_size, color = "lime", label = f"{src_region.meta['text']} source region center")
             src_region.plot(ax = axs[idx,0], color='lime', lw=1.0, label =  f"{src_region.meta['text']} source region")
             axs[idx,0].set_xlim(src_region.center.x - image_array_data.shape[0]*0.05, src_region.center.x + image_array_data.shape[0]*0.05)
@@ -712,7 +718,7 @@ def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs 
                                    marker = "+", s = marker_size, color = "orange", label = additional_coords_labels[idx_regs])
         
         if bkg_region is not None:
-            axs[idx,1].imshow(image_array_data, origin='lower', norm = ImageNormalize(data = image_array_data, stretch = LogStretch(data_strentch)), cmap='Greys_r', interpolation='nearest')
+            axs[idx,1].imshow(image_array_data, origin='lower', norm = norm, cmap='Greys_r', interpolation='nearest')
             axs[idx,1].scatter(bkg_region.center.x, bkg_region.center.y, marker = "+", s = marker_size, color = "red", label = f"{bkg_region.meta['text']} bakcground center")
             bkg_region.plot(ax = axs[idx,1], color='red', lw=1.0, label =  f"{bkg_region.meta['text']} bakcground annulus")
             axs[idx,1].set_xlim(bkg_region.center.x - image_array_data.shape[0]*0.05, bkg_region.center.x + image_array_data.shape[0]*0.05)

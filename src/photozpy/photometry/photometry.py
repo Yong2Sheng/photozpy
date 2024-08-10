@@ -171,6 +171,7 @@ class Photometry():
             collection_photometry = CollectionManager.filter_collection(self._image_collection, 
                                                                         **{"IMTYPE": "Master Light", "OBJECT": source_name})
             image_list = collection_photometry.files_filtered(include_path = True)
+            print(image_list)
 
             for image_path in image_list:
                 image_path = Path(image_path)
@@ -233,10 +234,20 @@ class Photometry():
                                    "filter": image_filter_name}
                 
                 tables += [phot_table]
+                    
+                for colname in ["xcenter", "ycenter"]:
+                    phot_table[colname].info.format = "%9.4f"
+                    
+                for colname in ["src+bkg", "bkg", "src"]:
+                    phot_table[colname].info.format = "%8d"
+                    
+                phot_table["src_error"].info.format = "%9.4f"
                 
-                for col in phot_table.colnames:
-                    phot_table[col].info.format = '%.4f'  # for consistent table output
-
+                phot_table["mag_inst"].info.format = "%8.4f"
+                
+                phot_table["mag_inst_error"].info.format = "%6.4f"
+                
+                
                 if verbose:
                     #nlines = len(phot_table) + 2
                     phot_table.pprint_all()
