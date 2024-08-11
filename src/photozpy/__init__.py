@@ -5,3 +5,4 @@ from .calibration import HeaderCorrection, HeaderManipulation, Combine, Reductio
 from .photometry import SourceDetection, Sources, Photometry, SwiftPhotometry
 from .convenience_functions import *
 from .mimage_collection import *
+from .new_sources import *
