@@ -236,6 +236,14 @@ class Telescope():
             raise ValueError("Mapping the input filter failed! More than two mapped filters are found!")
         else:
             return mapped_filters[0]
+        
+        
+    def __eq__(self, other):
+        
+        if self.telescope_summary == other.telescope_summary:
+            return True
+        else:
+            return False
     
                 
         

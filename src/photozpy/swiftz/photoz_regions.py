@@ -347,7 +347,7 @@ class CCD_Regions():
         elif isinstance(image_collection, mImageFileCollection):
             self._mcollection = image_collection
 
-        self.sources = sources
+        self._sources = sources
 
     def generate_ccd_regions(self, save_plots = True, hdu = 0, box_size = 51*u.pixel, **kwargs):
 
@@ -364,7 +364,7 @@ class CCD_Regions():
         """
 
         for image_collection in self._mcollection:
-            for source_name, source_coords in self.sources:
+            for source_name, source_coords in zip(self._sources.source_names, self._sources.coords):
                 image_paths = image_collection.files_filtered(include_path = True, **{"OBJECT" : source_name})
 
                 for image_path in image_paths:

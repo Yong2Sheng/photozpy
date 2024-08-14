@@ -15,10 +15,11 @@ from astropy.io import fits
 
 class PlateSolving():
 
-    def __init__(self, image_collection):
+    def __init__(self, image_collection, sources):
 
         # refresh the full collection
         self._image_collection = CollectionManager.refresh_collection(image_collection, rescan = True)
+        self._sources = sources
 
 
     def add_wcs(self, api, image_type = "Master Light", fwhm = None, detect_threshold = 5, solve_timeout = 120):
@@ -27,7 +28,15 @@ class PlateSolving():
         self._image_collection = CollectionManager.refresh_collection(self._image_collection, rescan = True)
 
         image_collection = CollectionManager.filter_collection(self._image_collection, **{"IMTYPE": image_type})
-        image_list = image_collection.files_filtered(include_path=True)
+        all_image_list = image_collection.files_filtered(include_path=True)
+        
+        # here I want to move the standard sources to the front of the list
+        # So once one standard image is finished adding wcs, I can start deciding the standard stars and the standard magnitudes RIGHT AWAY!
+        # I don't have to wait until the end of plate solving since it's quiet time consuming.
+        std_collection = CollectionManager.filter_collection(self._image_collection, **{"IMTYPE": "Master Light", "OBJECT":  self._sources.standard_stars[0].source_name})
+        std_list = std_collection.files_filtered(include_path=True)
+        target_list = [i for i in all_image_list if not i in std_list]
+        image_list = std_list + target_list
         
         for image in image_list:
             print(f"Adding WCS to {image}")

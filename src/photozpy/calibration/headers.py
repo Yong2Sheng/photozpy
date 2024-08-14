@@ -19,14 +19,16 @@ from astropy.io import fits
 
 class HeaderCorrection():
 
-    def __init__(self, image_collection, telescope, save_location = "", target_dict = None, overwrite = True):
+    def __init__(self, image_collection, sources, save_location = "", overwrite = True):
 
         """
         The input image collection.
 
         Parameters
         ----------
-        image_collection: ccdproc.ImageFileCollection; the collection of images
+        image_collection : ccdproc.ImageFileCollection
+            The collection of images
+        sources : 
         telescope:
         save_location: pathlib.Path; the location to save the edited files
         target_dict: dictionary; map the common part of the file names to a target, i.e. all the 
@@ -35,6 +37,11 @@ class HeaderCorrection():
         -------
         None
         """
+        
+        self._target_dict = {}
+        self._sources = sources
+        for source in self._sources:
+            self._target_dict[source.file_pattern] = source.source_name
 
         if not isinstance(image_collection, ImageFileCollection):
             raise TypeError("image_collection shoule be an ImageFileCollection objec!")
@@ -42,12 +49,7 @@ class HeaderCorrection():
             # refresh the full collection
             self._image_collection = CollectionManager.refresh_collection(image_collection, rescan = True)
 
-        if not isinstance(telescope, Telescope):
-            raise TypeError("telescope should be a Telescope oject!")
-        else:
-            self._telescope = telescope
-
-        self._target_dict = target_dict
+        self._telescope = self._sources.telescope
 
         return
 
@@ -172,26 +174,23 @@ class HeaderCorrection():
                 
             else:
                 # For light type, we need to add the target name
-                if self._target_dict == None:
-                    raise TypeError("Please provide a target dictionary!")
+                target_name = [value for key,value in self._target_dict.items() if key in fits_path.stem]
+                target_name = [*set(target_name)]
+                if len(target_name) != 1:
+                    pass
+                    print(f"There is no {fits_path.stem} file or the dictionary doesn't contain this file! Skipping.....")
                 else:
-                    target_name = [value for key,value in self._target_dict.items() if key in fits_path.stem]
-                    target_name = [*set(target_name)]
-                    if len(target_name) != 1:
-                        pass
-                        print(f"There is no {fits_path.stem} file or the dictionary doesn't contain this file! Skipping.....")
-                    else:
-                        target_name = target_name[0]
-                    header_dict = {"IMTYPE": ("Light", None),
-                                   "GAIN": (self._telescope.ccd_gain.value, self._telescope.ccd_gain.unit.to_string()),
-                                   "RDNOISE": (self._telescope.ccd_rdnoise.value, self._telescope.ccd_rdnoise.unit.to_string()),
-                                   "OBJECT": target_name,
-                                   "TELESCOP": self._telescope.telescope, 
-                                   "BUNIT": "ADU"}
-                    # create a image collection that only contains this single image
-                    one_image_collection = ImageFileCollection(location = self._image_collection.location, filenames = i)
-                    _ = HeaderManipulation.correct_headers(one_image_collection, save_location = save_location, 
-                                                           time_transformation = True, **header_dict)
+                    target_name = target_name[0]
+                header_dict = {"IMTYPE": ("Light", None),
+                               "GAIN": (self._telescope.ccd_gain.value, self._telescope.ccd_gain.unit.to_string()),
+                               "RDNOISE": (self._telescope.ccd_rdnoise.value, self._telescope.ccd_rdnoise.unit.to_string()),
+                               "OBJECT": target_name,
+                               "TELESCOP": self._telescope.telescope, 
+                               "BUNIT": "ADU"}
+                # create a image collection that only contains this single image
+                one_image_collection = ImageFileCollection(location = self._image_collection.location, filenames = i)
+                _ = HeaderManipulation.correct_headers(one_image_collection, save_location = save_location, 
+                                                       time_transformation = True, **header_dict)
 
         # refresh the image collection
         if save_location == "":

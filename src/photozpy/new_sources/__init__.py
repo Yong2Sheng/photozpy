@@ -1,1 +1,0 @@
-from .magnitude_info import MagnitudeInfo

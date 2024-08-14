@@ -11,7 +11,6 @@ from ..collection_manager import CollectionManager
 from astropy.nddata import CCDData
 from photutils.aperture import CircularAnnulus, CircularAperture, ApertureStats, aperture_photometry, SkyCircularAperture, SkyCircularAnnulus
 from astropy.io import fits
-from astropy.nddata import CCDData
 from astropy.stats import SigmaClip
 import numpy as np
 from ..convenience_functions import *
@@ -23,6 +22,9 @@ import os
 from astropy.coordinates import SkyCoord, concatenate
 import astropy.units as u
 from regions import PixCoord, CirclePixelRegion, CircleSkyRegion, Regions, CircleAnnulusSkyRegion
+from astropy.table import QTable
+import logging
+logger = logging.getLogger(__name__)
 
 class Photometry():
 
@@ -149,7 +151,7 @@ class Photometry():
 
         Parameters
         ----------
-        sources: photozpy.photometry.sources.Sources; the source dictionary
+        sources: include standard stars and targets
         aperture: float; the source aperture
         inner_annulus: float; the inner radius of the annulus
         outer_annulus: float; the outer radius of the annulus
@@ -161,23 +163,30 @@ class Photometry():
 
         # refresh the full collection
         self._image_collection = CollectionManager.refresh_collection(self._image_collection, rescan = True)
-        
-        tables = []
 
         # work on the obejct iteratively
-        for source_name, source_coords in sources:
+        for source in sources:
+            
+            source_name = source.source_name
+            telescope = source.telescope
 
             # get the image collection to work
             collection_photometry = CollectionManager.filter_collection(self._image_collection, 
                                                                         **{"IMTYPE": "Master Light", "OBJECT": source_name})
             image_list = collection_photometry.files_filtered(include_path = True)
             #print(image_list)
-
+            
+            #initialize mag and error dict
+            mag_dict = {filter_name: None for filter_name in telescope.filters}
+            mag_err_dict = {filter_name: None for filter_name in telescope.filters}
+            
             for image_path in image_list:
                 image_path = Path(image_path)
                 ccddata = CCDData.read(image_path, hdu = hdu)
                 image_headers = ccddata.header
                 image_filter_name = image_headers["FILTER"]
+                if not image_filter_name in telescope.filters:
+                    raise ValueError("The image filter is not in the filters of the telescope defined in sources!")
                 image_wcs = ccddata.wcs
                 image_array_data = ccddata.data
                 print(f"Working on photometry of {source_name} in {image_filter_name} from {image_path.name}")
@@ -232,8 +241,6 @@ class Photometry():
                 phot_table['mag_inst_error'].unit = u.mag
                 phot_table.meta = {"object": source_name,
                                    "filter": image_filter_name}
-                
-                tables += [phot_table]
                     
                 for colname in ["xcenter", "ycenter"]:
                     phot_table[colname].info.format = "%9.4f"
@@ -243,19 +250,31 @@ class Photometry():
                     
                 phot_table["src_error"].info.format = "%9.4f"
                 
-                phot_table["mag_inst"].info.format = "%8.4f"
+                phot_table["mag_inst"].info.format = "%4f"
                 
-                phot_table["mag_inst_error"].info.format = "%6.4f"
+                phot_table["mag_inst_error"].info.format = "%4f"
                 
+                mag_dict[image_filter_name] = phot_table["mag_inst"]
+                mag_err_dict[image_filter_name] = phot_table["mag_inst_error"]
                 
-                if verbose:
-                    #nlines = len(phot_table) + 2
-                    phot_table.pprint_all()
-                    #print(phot_table)
-                    print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n")
+                logger.info(phot_table)
+                
+            # replace np.nan with -99
+            for key, value in mag_dict.items():
+                for idx, v in enumerate(value):
+                    if np.isnan(v.value):
+                        mag_dict[key][idx] = -99*u.mag
+                        
+             # replace np.nan with -99
+            for key, value in mag_err_dict.items():
+                for idx, v in enumerate(value):
+                    if np.isnan(v.value):
+                        mag_err_dict[key][idx] = -99*u.mag
+                
+            source.magnitudes.inst_mags = QTable(mag_dict)
+            source.magnitudes.inst_mag_errors = QTable(mag_err_dict)
 
-
-        return tables
+        return
 
 class SwiftPhotometry():
 
