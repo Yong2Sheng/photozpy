@@ -25,6 +25,7 @@ from regions import PixCoord, CirclePixelRegion, CircleSkyRegion, Regions, Circl
 from astropy.table import QTable
 import logging
 logger = logging.getLogger(__name__)
+from collections.abc import Iterable
 
 class Photometry():
 
@@ -218,7 +219,27 @@ class Photometry():
 
                 # substract the background from the photometry
                 total_bkgs = bkgs * src_apertures_pix.area
+                
+                # # check if total background is negative:
+                # if not isinstance(total_bkgs, Iterable):
+                #     check_total_bkgs = [total_bkgs],
+                # else:
+                #     check_total_bkgs = total_bkgs
+                # for idx, j in enumerate(check_total_bkgs):
+                #     if j < 0:
+                #         logger.warning(f"The background for source_{idx} in {source_name} in {image_filter_name} is negative!")
+                        
                 phot_table['aperture_sum'].name = "src+bkg"
+                
+                # # check if the src+bkg is negative
+                # if not isinstance(phot_table['src+bkg'].value, Iterable):
+                #     check_src_bkg = [phot_table['src+bkg'].value]
+                # else:
+                #     check_src_bkg = phot_table['src+bkg'].value
+                # for idx, j in enumerate(check_src_bkg):
+                #     if j < 0:
+                #         logger.warning(f"The source+background for source_{idx} in {source_name} in {image_filter_name} is negative!")
+                        
                 phot_bkgsub = phot_table['src+bkg'] - total_bkgs
                 phot_bkgsub_error = np.sqrt(phot_table['src+bkg'].value + total_bkgs)
 
@@ -257,7 +278,7 @@ class Photometry():
                 mag_dict[image_filter_name] = phot_table["mag_inst"]
                 mag_err_dict[image_filter_name] = phot_table["mag_inst_error"]
                 
-                logger.info(phot_table)
+                phot_table.pprint_all()
                 
             # replace np.nan with -99
             for key, value in mag_dict.items():

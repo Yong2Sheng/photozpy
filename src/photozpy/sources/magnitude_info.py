@@ -4,6 +4,7 @@ from astropy.units.quantity import Quantity
 import copy
 from scipy import stats
 import numpy as np
+import matplotlib.pyplot as plt
 import logging
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class MagnitudeInfo():
         self._cab_mags = MagnitudeInfo._standarize_mags(cab_mags, self._filters)
         self._cab_mag_errors = MagnitudeInfo._standarize_mags(cab_mag_errors, self._filters)
         self._calibrated= calibrated
+        self._diff_dict = {}
         
 
     @staticmethod
@@ -109,6 +111,10 @@ class MagnitudeInfo():
     @cab_mag_errors.setter
     def cab_mag_errors(self, new_cab_mag_errors):
         self._cab_mag_errors = MagnitudeInfo._standarize_mags(new_cab_mag_errors, self._filters)
+        
+    @property 
+    def diff_zero_points(self):
+        return self._diff_dict
 
     @property
     def zero_points(self):
@@ -163,14 +169,14 @@ class MagnitudeInfo():
                 
                 
     @staticmethod
-    def remove_outlier(array, simga = 3, verbose = False):
+    def remove_outlier(array, sigma = 3, verbose = False):
     
         zscores = stats.zscore(array)
     
         new_array = []
     
         for element, zscore in zip(array, zscores):
-            if np.abs(zscore) <= simga:
+            if np.abs(zscore) <= sigma:
                 new_array += [element]
             else:
                 if verbose is True:
@@ -180,7 +186,7 @@ class MagnitudeInfo():
     
         return np.array(new_array)
     
-    def calculate_zero_points(self, update = True):
+    def calculate_zero_points(self, sigma = 3, update = True):
         
         if len(self._cab_mags) <= 8:          
             logger.warning(f"You only have {len(self._cab_mags)} standard stars, which is less than 8.")
@@ -200,11 +206,15 @@ class MagnitudeInfo():
                                               mag_list2 = self._inst_mags[filter_name], 
                                               operation = "-")
             
-            zero = MagnitudeInfo.remove_outlier(zero.value)  # remove outlier and give it an unit
+            self._diff_dict[filter_name] = zero.value
+            
+            zero = MagnitudeInfo.remove_outlier(zero.value, sigma = sigma)  # remove outlier and give it an unit
             
             zero = np.mean(zero)*u.mag
             
             calculated_zero_points[filter_name] = zero  # fill up the QTable 
+            
+            
             
             
         if update is True:
@@ -243,4 +253,41 @@ class MagnitudeInfo():
         self._calibrated = True
 
         return
+    
+    def plot_zero_point_statistics(self, save = True):
+        
+        nfilters = len(self._filters)
+        nrows = int(np.ceil(nfilters/2))
+        
+        fig, axes = plt.subplots(nrows, 2, figsize=(12,10), sharex=False) ##sharex=True
+        
+        for idx, filter_name in enumerate(self._filters):
+            
+            axes[int(np.floor(idx/2)), idx % 2].scatter(x = [filter_name]*len(self._diff_dict[filter_name]), 
+                                                   y = self._diff_dict[filter_name], 
+                                                   label = "offsets", color = "skyblue")
+            
+            axes[int(np.floor(idx/2)), idx % 2].scatter(x = [filter_name], 
+                                                  y = self._zero_points[filter_name], 
+                                                  label = r"$\sigma$-clipped average", color = "lime")
+            
+            axes[int(np.floor(idx/2)), idx % 2].hlines(y=self._zero_points[filter_name].value[0]-0.1, color='r', xmin = 0, xmax = 1, label = "sigma-clipped - 0.1")
+            axes[int(np.floor(idx/2)), idx % 2].hlines(y=self._zero_points[filter_name].value[0]+0.1, color='r', xmin = 0, xmax = 1, label = "sigma-clipped + 0.1")
+            
+            axes[int(np.floor(idx/2)), idx % 2].set_title(filter_name)
+            
+            
+            axes[int(np.floor(idx/2)), idx % 2].legend()
+            
+            
+        plt.show()
+            
+        if save is True:
+            fig.savefig("Zero_points_statistics", dpi=300)
+            
+        #plt.close()
+        
+        return
+        
+        
             

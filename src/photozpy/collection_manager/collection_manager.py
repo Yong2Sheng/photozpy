@@ -169,7 +169,7 @@ class CollectionManager():
         fits_path_to_plot = list(image_collection.files_filtered(include_path = True))
 
         for fits_path in tqdm(fits_path_to_plot):
-            plot_image(fits_path = fits_path)
+            plot_image(fits_path = fits_path, save_location = save_location)
 
         return 
 

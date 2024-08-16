@@ -326,6 +326,7 @@ def plot_image(fits_path = None,
         if save_location == None:
             image_path = fits_path.parent/image_name
         else:
+            Path(save_location).mkdir(exist_ok=True)
             image_path = Path(save_location)/image_name
     
         # Read fits data
@@ -340,6 +341,7 @@ def plot_image(fits_path = None,
         if save_location == None:
             image_path = Path(os.getcwd())/image_name
         else:
+            Path(save_location).mkdir(exist_ok=True)
             image_path = Path(save_location)/image_name
     else:
         raise ValueError("You must provide either fits file path or CCDData!")

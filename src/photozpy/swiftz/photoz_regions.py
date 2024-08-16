@@ -349,7 +349,7 @@ class CCD_Regions():
 
         self._sources = sources
 
-    def generate_ccd_regions(self, save_plots = True, hdu = 0, box_size = 51*u.pixel, **kwargs):
+    def generate_ccd_regions(self, save_plots = True, hdu = 0, box_size = 51*u.pixel, save_location = None, **kwargs):
 
         """
         Generate the regions files for CCD analyze. It support circular and annulus regions.
@@ -370,6 +370,11 @@ class CCD_Regions():
                 for image_path in image_paths:
                     image_path = Path(image_path)
                     image_parent_path = image_path.parent
+                    if save_location is None:
+                        save_location = Path(image_parent_path)
+                    else:
+                        save_location = Path(save_location)
+                        save_location.mkdir(exist_ok=True)
                     ccddata = CCDData.read(image_path, hdu = 0)
                     image_filter_name = ccddata.header["FILTER"]
                     image_wcs = ccddata.wcs
@@ -405,7 +410,7 @@ class CCD_Regions():
                         plot_regions(image_array_data = image_array_data, image_wcs = image_wcs, image_filter_name = image_filter_name, field_name = source_name, 
                                      src_region_path = src_region_path, bkg_region_path = bkg_region_path, aladin_image = None,
                                      additional_coords = source_coords, additional_coords_labels = "raw coordiante", 
-                                     aladin_stretch = 3000, data_strentch = 5000, save_dir = image_parent_path, save_image = True)
+                                     aladin_stretch = 3000, data_strentch = 5000, save_dir = save_location, save_image = True)
                         
         return
 

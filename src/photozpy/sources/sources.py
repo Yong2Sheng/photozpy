@@ -1,7 +1,11 @@
 # from .base_source_info import BaseSourceInfo
 # from .magnitude_info import MagnitudeInfo
 from itertools import product
+import pandas as pd
+import astropy.units as u
+from astropy.coordinates import SkyCoord
 import numpy as np
+from .base_source_info import BaseSourceInfo
 import logging
 logger = logging.getLogger(__name__)
 
@@ -25,6 +29,34 @@ class Sources():
     def from_list(cls, source_list):
         
         return cls(*source_list)
+    
+    @classmethod 
+    def from_csv(cls, csv_path, telescope, units = (u.hourangle, u.deg)):
+
+        df = pd.read_csv(csv_path, sep = ",")
+        
+        source_list = []
+        
+        for index, row in df.iterrows():
+        
+            if not row["ra"] is np.nan:
+                _skycoord = SkyCoord(ra = [row["ra"]], 
+                                     dec = [row["dec"]], 
+                                     unit = units)
+            else:
+                _skycoord = None
+        
+        
+            _source_info = BaseSourceInfo(source_name = row["source_name"], 
+                                          telescope = telescope, 
+                                          source_type = row["source_type"], 
+                                          skycoord = _skycoord, 
+                                          file_pattern = row["file_pattern"], 
+                                          magnitudes = None)
+            source_list += [_source_info]
+            
+        return cls(*source_list)
+        
 
     @staticmethod
     def check_uniqueness(in_list):
@@ -76,6 +108,10 @@ class Sources():
     @property 
     def standard_star_coords(self):
         return [i.skycoord for i in self.standard_stars]
+    
+    @property
+    def sources(self):
+        return self._sources
     
     @property 
     def telescope(self):
@@ -176,14 +212,14 @@ class Sources():
             return self._zpoints
 
 
-    def calculate_zpoints(self):
+    def calculate_zpoints(self, sigma = 3):
 
         """
         It only works with the case that one standard star image in all the sources
         """
 
         standard_star_magnitudes = self.standard_stars[0].magnitudes
-        self._zpoints = standard_star_magnitudes.calculate_zero_points(update = True)
+        self._zpoints = standard_star_magnitudes.calculate_zero_points(update = True, sigma = sigma)
 
         return self._zpoints  # This is a QTable
 
@@ -206,13 +242,13 @@ class Sources():
         for target in self.targets:
             print(target.source_name)
             # print magnitudes
+            print(f"The magnitudes in {telescope.filters} are:")
             for filter_names in telescope.filters:
-                print(f"The magnitudes in {filter_names} are:")
                 for i in np.around(target.magnitudes.cab_mags[filter_names].value, 4):
                     print(i)
             
+            print(f"The magnitude errors in {telescope.filters} are:")
             for filter_names in telescope.filters:
-                print(f"The magnitude errors in {filter_names} are:")
                 for i in np.around(target.magnitudes.cab_mag_errors[filter_names].value, 4):
                     print(i)
                 
