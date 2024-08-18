@@ -109,22 +109,69 @@ class Photometry():
 
             
     @staticmethod
-    def counts2mag(counts, c_const = 0):
+    def counts2mag(total_counts, bkg_counts, detection_sigma = 3, z_const = 0):
+    
         """
-        Calculate the instrumental magnitude.
-
-        Paremeters
+        Calculate the source magnitude, including upper limits based on the detection sigma over background mean.
+        The errors are calculated based on Poisson distribution and error propogation.
+        In order to let this function work for a list of counts, it only performs calculations in numpy arrays.
+        
+        Parameters
         ----------
-        counts: float;
-        c_const; float; the zero point
-
-        Returns
-        -------
-        mag: float; magnitude
+        total_counts : astropy.units.quantity.Quantity or float
+            The total counts, including source and background counts
+        bkg_counts : astropy.units.quantity.Quantity
+            The background counst.
+        detection_sigma : int
+            The sigma to determined the detection of a source over the background mean. 
+        z_const : float
+            The zero point to calibrate the instrumental magnitudes.
         """
-        mag = -2.5*np.log10(counts) + c_const
-
-        return mag
+    
+        if isinstance(total_counts, u.quantity.Quantity):
+            total_counts = total_counts.value
+    
+        if isinstance(bkg_counts, u.quantity.Quantity):
+            bkg_counts = bkg_counts.value
+            
+        if not isinstance(bkg_counts, Iterable): # check if bkg_counts is iterable since if there is only one annulus for the background,
+            bkg_counts = np.array([bkg_counts]) # the returned bkg_counts will be float instead numpy array. No need to worry about the total counts
+                                                # since it's obtained from the photo_table, which will return an array no matter the number of sources.
+    
+        if isinstance(z_const, u.quantity.Quantity):
+            z_const = zconst.value
+        
+        # the error of the total counts based on Poisson statistics
+        total_error = np.sqrt(total_counts)
+    
+        # the error of the bkg counts based on Poisson statistics
+        bkg_error = np.sqrt(bkg_counts)
+    
+        # the counts, error and significance of the source counts
+        src_counts = total_counts - bkg_counts
+        src_error = np.sqrt(total_error**2 + bkg_error**2)
+        src_significance = src_counts/bkg_error
+    
+    
+        mag_list = []
+        error_list = []
+    
+        for idx, sig in enumerate(src_significance):
+        
+            # determine if we detect the source or not (magnitude value or magnitude upper limit)
+            if sig >= detection_sigma: # this is the detection of a source
+                src_mag = -2.5*np.log10(src_counts[idx]) + z_const
+                mag_list += [src_mag]
+                src_mag_error = (2.5/np.log(10))*(src_error[idx]/src_counts[idx])
+                error_list += [src_mag_error]
+                
+                
+            elif sig < detection_sigma:
+                src_upper = -2.5*np.log10(bkg_error[idx]*detection_sigma) + z_const
+                mag_list += [src_upper]
+                error_list += [-99]
+    
+        return mag_list*u.mag, error_list*u.mag, src_significance
     
     @staticmethod
     def region2aperture(regions):
@@ -145,7 +192,7 @@ class Photometry():
                 
         
     
-    def run_photometry(self, sources, bkg_clip_sigma = 3, hdu = 0, verbose = True):
+    def run_photometry(self, sources, bkg_clip_sigma = 3, src_detection_sigma = 3, hdu = 0, verbose = True):
 
         """
         Does the aperture photometry on the skycoords.
@@ -180,6 +227,7 @@ class Photometry():
             #initialize mag and error dict
             mag_dict = {filter_name: None for filter_name in telescope.filters}
             mag_err_dict = {filter_name: None for filter_name in telescope.filters}
+            significance_dict =  {filter_name: None for filter_name in telescope.filters}
             
             for image_path in image_list:
                 image_path = Path(image_path)
@@ -212,6 +260,8 @@ class Photometry():
                     bkg_annulus_pix = bkg_regions_sky.to_pixel(image_wcs)
                 
                 # get the sigma_clipped background estimation for all the annulus apertures
+                # Important! If the annulus aperture contains multiple annulus (standard star case), the returned bkgs will be an array
+                # If the annulus aperture contains only one annulus (target case), the returned bkgs will be a float
                 bkgs = Photometry.get_background(image_array_data = image_array_data, annulus_aperture = bkg_annulus_pix, sigma = bkg_clip_sigma)
 
                 # perform aperture photometry
@@ -242,24 +292,28 @@ class Photometry():
                         
                 phot_bkgsub = phot_table['src+bkg'] - total_bkgs
                 phot_bkgsub_error = np.sqrt(phot_table['src+bkg'].value + total_bkgs)
+                
 
                 # calculate the instrumental magnitude
-                m_inst = Photometry.counts2mag(phot_bkgsub.value)
-                m_inst_error = (2.5/np.log(10))*(phot_bkgsub_error/phot_bkgsub.value)
-
+                m_inst, m_inst_error, significance = Photometry.counts2mag(total_counts = phot_table['src+bkg'], 
+                                                                           bkg_counts = total_bkgs, 
+                                                                           detection_sigma = src_detection_sigma, 
+                                                                           z_const = 0)
+                
                 # organize the Qtable
                 phot_table['bkg'] = total_bkgs  # add the column for total background
                 phot_table['src'] = phot_bkgsub  # add the column for bkg substracted photometry
                 phot_table['src_error'] = phot_bkgsub_error
                 phot_table['mag_inst'] = m_inst  # add the column for instrumental magnitude
                 phot_table['mag_inst_error'] = m_inst_error
+                phot_table["src_significance"] = significance
 
                 phot_table['src+bkg'].unit = u.ct
                 phot_table['bkg'].unit = u.ct
                 phot_table['src'].unit = u.ct
                 phot_table['src_error'].unit = u.ct
-                phot_table['mag_inst'].unit = u.mag
-                phot_table['mag_inst_error'].unit = u.mag
+                # phot_table['mag_inst'].unit = u.mag
+                # phot_table['mag_inst_error'].unit = u.mag
                 phot_table.meta = {"object": source_name,
                                    "filter": image_filter_name}
                     
@@ -277,23 +331,27 @@ class Photometry():
                 
                 mag_dict[image_filter_name] = phot_table["mag_inst"]
                 mag_err_dict[image_filter_name] = phot_table["mag_inst_error"]
+                significance_dict[image_filter_name] = phot_table["src_significance"]
                 
                 phot_table.pprint_all()
+            print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
                 
-            # replace np.nan with -99
-            for key, value in mag_dict.items():
-                for idx, v in enumerate(value):
-                    if np.isnan(v.value):
-                        mag_dict[key][idx] = -99*u.mag
+            # # replace np.nan with -99
+            # for key, value in mag_dict.items():
+            #     for idx, v in enumerate(value):
+            #         if np.isnan(v.value):
+            #             mag_dict[key][idx] = -99*u.mag
                         
-             # replace np.nan with -99
-            for key, value in mag_err_dict.items():
-                for idx, v in enumerate(value):
-                    if np.isnan(v.value):
-                        mag_err_dict[key][idx] = -99*u.mag
+            #  # replace np.nan with -99
+            # for key, value in mag_err_dict.items():
+            #     for idx, v in enumerate(value):
+            #         if np.isnan(v.value):
+            #             mag_err_dict[key][idx] = -99*u.mag
                 
             source.magnitudes.inst_mags = QTable(mag_dict)
             source.magnitudes.inst_mag_errors = QTable(mag_err_dict)
+            source.magnitudes.detection_significance = QTable(significance_dict)
+            
 
         return
 
