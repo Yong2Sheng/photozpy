@@ -32,7 +32,8 @@ class MagnitudeInfo():
         self._cab_mags = MagnitudeInfo._standarize_mags(cab_mags, self._filters)
         self._cab_mag_errors = MagnitudeInfo._standarize_mags(cab_mag_errors, self._filters)
         self._calibrated= calibrated
-        self._diff_dict = {}
+        self._diff_dict = {}  # the difference between calibrated and instrumental magnitudes, which is also the zero points, in all the filters
+        self._significance = {}  # the detection significance for sources in all filters
         
 
     @staticmethod
@@ -53,7 +54,7 @@ class MagnitudeInfo():
   
         elif isinstance(mags, list):
             
-            if isinstance(mags[0], (Quantity, list)):  # [[-99, 23]*u.mag, [-99, 56]*u.mag, [-99, 46]*u.mag, [-99, 233]*u.mag], [[-99, 23], [-99, 56], [-99, 46]]
+            if isinstance(mags[0], (Quantity, list)):  # [[-99, 23]*u.mag, [-99, 56]*u.mag, [-99, 46]*u.mag, [-99, 233]*u.mag] or [[-99, 23], [-99, 56], [-99, 46]]
                 
                 rows = [len(i) for i in mags]
                 
@@ -123,6 +124,14 @@ class MagnitudeInfo():
     @zero_points.setter
     def zero_points(self, new_zero_points):
         self._zero_points = MagnitudeInfo._standarize_mags(new_zero_points, self._filters)
+        
+    @property
+    def detection_significance(self):
+        return self._significance
+    
+    @detection_significance.setter
+    def detection_significance(self, new_detection_significance):
+        self._significance = QTable(new_detection_significance)  # for simplicity, only QTable is supported since users should not input detection significance
 
     @staticmethod
     def single_mag_operator(mag1, mag2, operation):
@@ -208,13 +217,15 @@ class MagnitudeInfo():
             
             self._diff_dict[filter_name] = zero.value
             
+            # here we only use standard stars with detection significance >= 3.0
+            useful_index = self._significance[filter_name] >=3.0
+            zero = zero[useful_index]
+            
             zero = MagnitudeInfo.remove_outlier(zero.value, sigma = sigma)  # remove outlier and give it an unit
             
             zero = np.mean(zero)*u.mag
             
             calculated_zero_points[filter_name] = zero  # fill up the QTable 
-            
-            
             
             
         if update is True:
