@@ -212,14 +212,14 @@ class Sources():
             return self._zpoints
 
 
-    def calculate_zpoints(self, sigma = 3):
+    def calculate_zpoints(self, clip_sigma = 3):
 
         """
         It only works with the case that one standard star image in all the sources
         """
 
         standard_star_magnitudes = self.standard_stars[0].magnitudes
-        self._zpoints = standard_star_magnitudes.calculate_zero_points(update = True, sigma = sigma)
+        self._zpoints = standard_star_magnitudes.calculate_zero_points(update = True, sigma = clip_sigma)
 
         return self._zpoints  # This is a QTable
 
@@ -247,9 +247,16 @@ class Sources():
                 for i in np.around(target.magnitudes.cab_mags[filter_names].value, 4):
                     print(i)
             
+            # print magnitude errors
             print(f"The magnitude errors in {telescope.filters} are:")
             for filter_names in telescope.filters:
                 for i in np.around(target.magnitudes.cab_mag_errors[filter_names].value, 4):
+                    print(i)
+                    
+            # print detection significance
+            print(f"The detection significance in {telescope.filters} are:")
+            for filter_names in telescope.filters:
+                for i in np.around(target.magnitudes.detection_significance[filter_names].value, 4):
                     print(i)
                 
             print("======================================================================")
