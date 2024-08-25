@@ -2,7 +2,7 @@ from setuptools import setup, find_namespace_packages, find_packages
 
 setup(
     name = "photozpy",
-    python_requires=">=3.7",
+    python_requires="==3.9.19",
     version = "0.1",
     author = "Yong Sheng",
     author_email = "sheng2@clemson.edu",
