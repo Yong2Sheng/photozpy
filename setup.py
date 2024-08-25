@@ -23,7 +23,7 @@ setup(
         "chardet",
         "ccdproc==2.4.2",
         "photutils==1.11.0",
-        "astroalign==2.5.1,
+        "astroalign==2.5.1",
         "scipy==1.13.1",
         "matplotlib==3.9.0",
         "astroquery==0.4.7",
