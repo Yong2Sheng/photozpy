@@ -234,11 +234,11 @@ class Photometry():
                 ccddata = CCDData.read(image_path, hdu = hdu)
                 image_headers = ccddata.header
                 image_filter_name = image_headers["FILTER"]
+                print(f"Working on photometry of {source_name} in {image_filter_name} from {image_path.name}")
                 if not image_filter_name in telescope.filters:
                     raise ValueError("The image filter is not in the filters of the telescope defined in sources!")
                 image_wcs = ccddata.wcs
                 image_array_data = ccddata.data
-                print(f"Working on photometry of {source_name} in {image_filter_name} from {image_path.name}")
                 print("-------------------------------------------------------------------------------------------------")
 
                 # get the aperture and annulus aperture

@@ -368,6 +368,7 @@ class CCD_Regions():
                 image_paths = image_collection.files_filtered(include_path = True, **{"OBJECT" : source_name})
 
                 for image_path in image_paths:
+                    print(f"Working on file {image_path}")
                     image_path = Path(image_path)
                     image_parent_path = image_path.parent
                     if save_location is None:
@@ -744,7 +745,7 @@ def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs 
         ax.legend()
         
     if save_image is True:
-        fig.savefig(save_dir / f"{field_name}_{image_filter_name}_regions.png", dpi = 300, bbox_inches = "tight")
+        fig.savefig(save_dir / f"{field_name}_{image_filter_name}_regions.png", dpi = 150, bbox_inches = "tight")
         plt.close()
         
     return
