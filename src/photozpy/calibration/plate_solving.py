@@ -22,7 +22,7 @@ class PlateSolving():
         self._sources = sources
 
 
-    def add_wcs(self, api, image_type = "Master Light", fwhm = None, detect_threshold = 5, solve_timeout = 120):
+    def add_wcs(self, api, image_type = "Master Light", fwhm = None, detect_threshold = 5, solve_timeout = 120, ra_header_name = "RA", dec_header_name = "DEC", ra_dec_units = ("hour", "deg")):
 
         # refresh the full collection
         self._image_collection = CollectionManager.refresh_collection(self._image_collection, rescan = True)
