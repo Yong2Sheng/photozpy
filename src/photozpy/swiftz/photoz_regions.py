@@ -159,11 +159,12 @@ class PhotozRegions():
 
                 #convert to the pixel coordinate
                 pixel_coord = convert_coords(wcs = ccddata.wcs, skycoords = sky_coord, pixelcoords = None, verbose = False)
+                # pixel_coord is a 2D array: [[616.97892108 579.9653181 ]] 
 
 
                 # get the centroid pixelcoords
                 x_centroids , y_centroids = centroid_sources(array_data_no_bkg, 
-                                                             pixel_coord[0], pixel_coord[1], 
+                                                             pixel_coord[0][0], pixel_coord[0][1], 
                                                              box_size = box_size, 
                                                              centroid_func = centroid_method)
 
@@ -172,7 +173,7 @@ class PhotozRegions():
                     print(f"The fitting for {filter_name} using {centroid_method.__name__} failed, switch to {centroid_com.__name__} instead!")
                     
                     x_centroids , y_centroids = centroid_sources(array_data_no_bkg, 
-                                                                 pixel_coord[0], pixel_coord[1], 
+                                                                 pixel_coord[0][0], pixel_coord[0][1], 
                                                                  box_size = box_size, 
                                                                  centroid_func = centroid_com)
                     
@@ -293,28 +294,28 @@ class PhotozRegions():
         # plot images to subplots
         # the full image
         axs[0,0].imshow(array_data, origin='lower', norm=norm, cmap='Greys_r', interpolation='nearest')
-        axs[0,0].legend()
+        #axs[0,0].legend()
         axs[0,0].set_title("Full sky image", fontsize = subtitle_fontsize)
     
         # source (and background), upper right
         axs[0,1].imshow(array_data, origin='lower', norm=norm, cmap='Greys_r', interpolation='nearest')
         axs[0,1].set_xlim(source_pixelregion.center.x - image_cutout[1], source_pixelregion.center.x + image_cutout[1])
         axs[0,1].set_ylim(source_pixelregion.center.y - image_cutout[1], source_pixelregion.center.y+ image_cutout[1])
-        axs[0,1].legend()
+        #axs[0,1].legend()
         axs[0,1].set_title('Source (and background) region)', fontsize = subtitle_fontsize)
     
         # the source regions zoomed in, side wdith = 100
         axs[1,0].imshow(array_data, origin='lower', norm=norm, cmap='Greys_r', interpolation='nearest')
         axs[1,0].set_xlim(source_pixelregion.center.x - image_cutout[2], source_pixelregion.center.x + image_cutout[2])
         axs[1,0].set_ylim(source_pixelregion.center.y - image_cutout[2], source_pixelregion.center.y+ image_cutout[2])
-        axs[1,0].legend()
+        #axs[1,0].legend()
         axs[1,0].set_title('Source region zoomed in', fontsize = subtitle_fontsize)
     
         # the background regions zoomed in side width = 120
         axs[1,1].imshow(array_data, origin='lower', norm=norm, cmap='Greys_r', interpolation='nearest')
         axs[1,1].set_xlim(bkg_pixelregion.center.x - image_cutout[3], bkg_pixelregion.center.x + image_cutout[3])
         axs[1,1].set_ylim(bkg_pixelregion.center.y - image_cutout[3], bkg_pixelregion.center.y+ image_cutout[3])
-        axs[1,1].legend()
+        #axs[1,1].legend()
         axs[1,1].set_title('Background region zoomed in', fontsize = subtitle_fontsize)
         axs[1,1].tick_params(which='major', labelsize=12)
     
@@ -327,7 +328,9 @@ class PhotozRegions():
             ax.legend(fontsize = subplot_labelsize)
             if other_coords is not None:
                 for coord_, label_ in zip(other_coords, other_coord_labels):
-                    ax.scatter(coord_.ra.deg, coord_.dec.deg, marker = "+", s = 10, color = "cyan", label = label_)
+                    other_pixel_coord = convert_coords(wcs = wcs, skycoords = coord_, pixelcoords = None, verbose = False)
+                    ax.scatter(other_pixel_coord[0][0], other_pixel_coord[0][1], marker = "+", s = 10, color = "orange", label = label_)
+            ax.legend()
     
         fig.savefig(save_dir / f"{source_name}_{filter_name}.png", dpi = 300, bbox_inches = "tight")
 
