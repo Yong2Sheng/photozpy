@@ -233,7 +233,7 @@ class Combine():
                         rdnoise = combined.meta["RDNOISE"]
                         combined.meta["RDNOISE"] = rdnoise/np.sqrt(image_number)  # update the RDNOISE
                         gain = combined.meta["GAIN"]
-                        combined.meta["GAIN"] = gain*image_number  # update the GAIN
+                        combined.meta["GAIN"] = gain* # the gain should remain the same
                     combined.write(save_location / f"Master_{object_name}_{filter}.fits", overwrite = True)
                     print(f"{object_name} in {filter} filter combined!")
                     print("----------------------------------------------------------\n")
