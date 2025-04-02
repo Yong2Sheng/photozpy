@@ -321,7 +321,10 @@ class HeaderManipulation():
                        "SDSS_r": "SDSS_r'", 
                        "SDSS_i": "SDSS_i'", 
                        "SDSS_z": "SDSS_z'",
-                       "Bessell I": "Bessell_I",
+                       "BESSEL B": "Bessel_B",
+                       "BESSEL V": "Bessel_V",
+                       "BESSEL R": "Bessel_R",
+                       "BESSEL I": "Bessel_I",
                        "B": "ubb",
                        "UVM2": "um2",
                        "U": "uuu",
@@ -331,13 +334,13 @@ class HeaderManipulation():
         else:
             mappers = filter_dict
             
-        mapped_filters = [value for key,value in mappers.items() if key in name]
+        mapped_filters = [value for key,value in mappers.items() if key == name]
         mapped_filters = [*set(mapped_filters)] # remove the duplicated filter names
         
         if len(mapped_filters) == 0:
-            raise ValueError("Mapping the input filter failed! No mapped filter {name} was found!")
+            raise ValueError(f"Mapping the input filter failed! No mapped filter {name} was found!")
         elif len(mapped_filters) > 1:
-            raise ValueError("Mapping the input filter failed! More than two mapped filters are found!")
+            raise ValueError(f"Mapping the input filter failed! More than two mapped filters are found: {mapped_filters}")
         else:
             return mapped_filters[0]
     
