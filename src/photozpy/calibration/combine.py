@@ -164,14 +164,14 @@ class Combine():
         # first select image types (Flat or Light)
         collection_to_combine = CollectionManager.filter_collection(self._image_collection, **{"IMTYPE": [image_type]})
 
-        # flat or light IMTYPE has filters, get the filters used in the collection
-        filters = CollectionManager.get_header_values(collection_to_combine, "FILTER", unique = True)
-
         # Get the object names (Flat or various target names)
         object_names = HeaderManipulation.get_header_values(collection_to_combine, header = "object")  # It seems only the lower cases work
         object_names = [*set(object_names)]  # remove duplicate elements
+        print(f"The objects to be combined are {object_names}")
     
         for object_name in object_names:
+            collection_object = CollectionManager.filter_collection(self._image_collection, **{"object": [object_name]})
+            filters = CollectionManager.get_header_values(collection_object, "FILTER", unique = True)
             for filter in filters:
                 # get the image collection with specific filter and object name
                 collection_temp = CollectionManager.filter_collection(collection_to_combine, **{"OBJECT": [object_name], "FILTER": [filter]})
