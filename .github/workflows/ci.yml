@@ -24,7 +24,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
+          #cache: 'pip'  # ← 先去掉，等你有 requirements.txt 再开
 
       - name: Install package and dev tools
         run: |
