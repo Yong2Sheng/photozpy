@@ -28,6 +28,8 @@ repos:
     rev: 24.4.2
     hooks:
       - id: black
+        pass_filenames: false   # 👈 不传具体文件，避免只扫改动文件，发生 pre-commit success 但是 CI fail 的情况
+        args: ["."]             # 👈 强制对整个仓库运行 Black
         # Exclude notebooks if you don't want Black to touch them yet
 
   # ---------- Lint ----------
@@ -35,7 +37,8 @@ repos:
     rev: v0.5.6
     hooks:
       - id: ruff
-        args: [--fix]               # auto-fix safe issues
+        pass_filenames: false   # 不传文件名
+        args: ["--fix", "."]  # 扫整个仓库并自动修复安全问题
 
   # ---------- Typing (optional but helpful) ----------
   # Enable if you want local type checks; otherwise keep in CI only.
