@@ -30,4 +30,4 @@ The photo-z analysis pipeline with python
 	>>> pip install -e .
 	```
 
-6. Once the installation is done, you can import and use `photozpy` module. Please go to the *docs* folder to try out the tutorial. 
+6. Once the installation is done, you can import and use `photozpy` module. Please go to the *docs* folder to try out the tutorial.

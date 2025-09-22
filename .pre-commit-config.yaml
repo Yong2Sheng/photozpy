@@ -1,0 +1,93 @@
+# .pre-commit-config.yaml (example with exclude)
+default_language_version:
+  python: python3.9
+
+exclude: |
+  (?x)^(
+    docs/_build/|
+    build/|
+    dist/|
+    \.venv/|
+    \.mypy_cache/|
+    \.pytest_cache/|
+    __pycache__/|
+    .*\.ipynb
+  )$
+
+# Categories:
+# - Format: keep code style consistent
+# - Lint: catch bugs and style issues early
+# - Typing (optional): static type checks
+# - Hygiene/Safety: catch common repo issues
+# - Notebooks (optional): keep outputs clean or skip notebooks
+# - Pre-push smoke tests (optional): run a tiny subset before pushing
+
+repos:
+  # ---------- Format ----------
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks:
+      - id: black
+        # Exclude notebooks if you don't want Black to touch them yet
+
+  # ---------- Lint ----------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.6
+    hooks:
+      - id: ruff
+        args: [--fix]               # auto-fix safe issues
+
+  # ---------- Typing (optional but helpful) ----------
+  # Enable if you want local type checks; otherwise keep in CI only.
+  # - repo: https://github.com/pre-commit/mirrors-mypy
+  #   rev: v1.10.0
+  #   hooks:
+  #     - id: mypy
+  #       args: [--pretty, --show-error-codes]
+  #       additional_dependencies:
+  #         - types-requests        # example of stubs; add others as needed
+  #       files: ^src/              # limit to your package code
+
+  # ---------- Hygiene / Safety ----------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict        # prevent committing conflict markers
+      - id: check-yaml                  # validate .yml/.yaml
+      - id: check-json                  # validate JSON files
+      - id: check-toml                  # validate TOML files (if any)
+      - id: check-case-conflict         # warn about case-insensitive FS collisiois
+     # - id: mixed-line-ending           # 统一换行风格
+      - id: check-added-large-files     # 给「大文件」阈值一个你能接受的上限（默认 5MB）
+        args: ["--maxkb=30000"]  # 5MB；或换成你项目想要的大小
+
+  # (Optional) basic spelling to catch obvious typos in docs/README
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.3.0
+    hooks:
+      - id: codespell
+        #args: args are moved to .codespellrc
+          #- --write-changes
+          #- -L
+          #- nd,teh,mjd,ra,dec,fwhm,psf,skycoords,skycoord        # add project-specific false positives here
+
+  # ---------- Notebooks (optional) ----------
+  # If you want to strip outputs on commit to reduce diffs:
+  # - repo: https://github.com/kynan/nbstripout
+  #   rev: 0.7.1
+  #   hooks:
+  #     - id: nbstripout
+
+  # ---------- Pre-push smoke tests (optional) ----------
+  # This does NOT replace full CI tests; it just runs a tiny, fast subset before push.
+  # You can comment this whole block out if you don't want tests in pre-commit.
+  - repo: local
+    hooks:
+      - id: pytest-smoke
+        name: "pytest -m smoke (pre-push)"
+        entry: bash -c 'pytest -q -m smoke -x --disable-warnings'
+        language: system
+        stages: [pre-push]                  # run on git push, not on every commit, hook 没写 stages，实际上默认就是 [pre-commit]
+        pass_filenames: false

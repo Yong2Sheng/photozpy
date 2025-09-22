@@ -4,6 +4,17 @@
 photozpy.egg-info/
 *__pycache__
 *.DS_Store*
-tests/
 src/photozpy/calibration/testing_files/
 
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+
+# Unit test / coverage reports
+htmlcov/
+.coverage
+coverage.xml
+tests/coverage_report/
+
+# Pytest cache
+.pytest_cache/

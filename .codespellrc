@@ -1,0 +1,4 @@
+[codespell]
+write-changes = true
+ignore-words-list = nd,teh,mjd,ra,dec,fwhm,psf,skycoords,skycoord
+skip = *.fits,*.reg

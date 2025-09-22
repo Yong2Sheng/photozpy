@@ -1,0 +1,10 @@
+# ruff.toml
+exclude = [
+    "*.ipynb",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    ".mypy_cache",
+    ".pytest_cache",
+]

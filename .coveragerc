@@ -1,0 +1,15 @@
+# .coveragerc
+[run] 
+# measure branch coverage (both if/else paths)
+branch = True
+
+# restrict measurement to YOUR code only
+source =
+    src/photozpy
+
+[report]
+# list missing lines in terminal report
+show_missing = True
+
+# hide empty files like trivial __init__.py          
+skip_empty = True

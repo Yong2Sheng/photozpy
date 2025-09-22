@@ -1,0 +1,63 @@
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [develop]   # 你在用 develop；如需只跑 develop 就只写 develop
+  pull_request:                    # 有 PR 时也会跑（你目前不用 PR 也没关系）
+  workflow_dispatch:               # 允许在 Actions 页面手动触发
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9.19']   # 与本地一致；也可以扩成多版本矩阵
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install package and dev tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"     # 你的 setup.py extras_require['dev'] 会装 pytest/ruff 等
+
+      # —— 可选：在 CI 上也跑一次静态检查（和本地 pre-commit 对齐）——
+      - name: Lint (ruff) and format check (black)
+        run: |
+          ruff check .
+          black --check .
+
+      - name: Run tests with coverage (HTML + XML)
+        run: |
+          pytest --cov=photozpy \
+                 --cov-report=term-missing \
+                 --cov-report=xml:coverage.xml \
+                 --cov-report=html:tests/coverage_report
+
+      # 把 HTML 覆盖率报告作为工件上传，方便从网页下载浏览
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-coverage
+          path: tests/coverage_report
+          if-no-files-found: error
+          retention-days: 7
+
+      # 上传覆盖率到 Codecov（公有仓库无需 token；私有仓库要在 Secrets 里配置）
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          fail_ci_if_error: true
+          verbose: true
+          # token: ${{ secrets.CODECOV_TOKEN }}  # 私有库才需要
