@@ -28,7 +28,8 @@ class Registration:
         self._telescope = telescope
 
     @staticmethod
-    def _Register_images(image_collection, filter, min_area=5, detection_sigma=5):
+    def _Register_images(image_collection, filter,
+                         min_area=5, detection_sigma=5):
         """
         Register all the images with same object in the collection.
 
@@ -41,7 +42,8 @@ class Registration:
         new_image_collection
         """
 
-        # get the image type and make sure the collection only has Light type images
+        # get the image type and make sure the collection only has Light type
+        # images
         image_type = HeaderManipulation.get_header_values(
             image_collection, header="imtype"
         )
@@ -61,7 +63,8 @@ class Registration:
             image_collection, header="object"
         )
         if len(object_name) != 1:
-            raise ValueError("You have more than one object in the image collection!")
+            raise ValueError(
+                "You have more than one object in the image collection!")
 
         print(f"Aligning {object_name} ......")
 
@@ -78,11 +81,13 @@ class Registration:
         reference_data = reference_ext0.byteswap().newbyteorder()
         # reference_data, mask = lacosmic(reference_data)
 
-        # get the image collection to be registered by removing the one used to register
+        # get the image collection to be registered by removing the one used to
+        # register
         register_collection = CollectionManager.delete_images(
             image_collection, refernece_image_name
         )
-        register_image_paths = register_collection.files_filtered(include_path=True)
+        register_image_paths = register_collection.files_filtered(
+            include_path=True)
 
         # start image registration, the files will be over written
         for i in register_image_paths:

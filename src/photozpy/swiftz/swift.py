@@ -36,11 +36,17 @@ class UVOTZ:
             df = pd.DataFrame(
                 columns=["name", "ra", "dec", "window_lower", "window_upper"]
             )
-            df.to_csv(self.analysis_root_dir + "/metadata.csv", sep=",", index=False)
-            print(f"A template csv file is generated at {self.analysis_root_dir}!")
+            df.to_csv(
+                self.analysis_root_dir +
+                "/metadata.csv",
+                sep=",",
+                index=False)
+            print(
+                f"A template csv file is generated at {self.analysis_root_dir}!")
 
         self.data_dir = self.analysis_root_dir + "/data"
-        _ = self.create_folder(self.data_dir)  # here I don't need the returned value
+        # here I don't need the returned value
+        _ = self.create_folder(self.data_dir)
 
     def str_to_list(self, str):
         return str[1:-2].replace("'", "").split(", ")
@@ -145,7 +151,12 @@ class UVOTZ:
             ra_dec = {
                 key: value for key, value in kwargs.items() if key in {"ra", "dec"}
             }
-            skycoord = SkyCoord(**ra_dec, unit=(u.hourangle, u.deg), frame="icrs")
+            skycoord = SkyCoord(
+                **ra_dec,
+                unit=(
+                    u.hourangle,
+                    u.deg),
+                frame="icrs")
 
             return {"name": kwargs["name"], "skycoord": skycoord}
 
@@ -189,7 +200,8 @@ class UVOTZ:
             src_obsid_time = []
             for i in np.flip(np.arange(-len(oq), 0)):
                 if oq[i].obsid == id_:
-                    print(f"{oq[i].obsid} has been downloaded/examined, skipping ...")
+                    print(
+                        f"{oq[i].obsid} has been downloaded/examined, skipping ...")
                 else:
                     if oq[i].uvot_mode == uvotmode:
                         date_ = oq[i].begin.strftime("%Y-%m-%d %H:%M:%S")
@@ -250,7 +262,8 @@ class UVOTZ:
 
     def get_src_region(self, saving_dir, ra, dec):
 
-        reg_files = [saving_dir + "/" + i + ".reg" for i in self.full_filter_list]
+        reg_files = [saving_dir + "/" + i +
+                     ".reg" for i in self.full_filter_list]
 
         for reg in reg_files:
             f = open(reg, "w")
@@ -278,7 +291,8 @@ class UVOTZ:
         out_dir: str; the directory of the output file
         """
         if sum_type == "one_only":  # when there is only one obs file
-            filter_name = file[-13:-10]  # get the filer name from the file name
+            # get the filer name from the file name
+            filter_name = file[-13:-10]
             out_dir = kwargs["summed_dir"] + f"/all{filter_name}.fits"
             os.system(
                 f"uvotimsum infile={file} outfile={out_dir} | tee -a uvotimsum_log.txt >/dev/null 2>&1"
@@ -332,7 +346,8 @@ class UVOTZ:
 
             if len(obsids) == 1:  # it means there is only one sky image
                 obsid_dir = self.str_to_list(df.loc[i, "obsid_saving_dir"])[0]
-                img_files = glob.glob(obsid_dir + "/uvot/image/" + "*sk.img.gz")
+                img_files = glob.glob(
+                    obsid_dir + "/uvot/image/" + "*sk.img.gz")
                 for img_file in img_files:
                     if self.check_ASPCORR(img_file):
                         summed_fits = self.sum_images(
@@ -341,8 +356,10 @@ class UVOTZ:
                         final_fits.append(summed_fits)
 
             else:
-                for obsid_dir in self.str_to_list(df.loc[i, "obsid_saving_dir"]):
-                    img_files = glob.glob(obsid_dir + "/uvot/image/" + "*sk.img.gz")
+                for obsid_dir in self.str_to_list(
+                        df.loc[i, "obsid_saving_dir"]):
+                    img_files = glob.glob(
+                        obsid_dir + "/uvot/image/" + "*sk.img.gz")
                     for img_file in img_files:
                         if self.check_ASPCORR(img_file):
                             self.sum_images(
@@ -367,7 +384,8 @@ class UVOTZ:
                         fappended_file = (
                             filter_fits[-1][0:-21] + f"/_{filter_}.fits"
                         )  # the file to be appended on
-                        shutil.copy2(filter_fits[-1], fappended_file)  # make a copy
+                        # make a copy
+                        shutil.copy2(filter_fits[-1], fappended_file)
 
                         for j in filter_fits[0:-1]:
                             os.system(f"fappend {j} {fappended_file}")
@@ -384,7 +402,8 @@ class UVOTZ:
                 inter_dir = summed_dir + "/intermediate"
                 os.system(f"mv {_} {inter_dir}")
 
-            reg_files = self.get_src_region(saving_dir=summed_dir, ra=ra, dec=dec)
+            reg_files = self.get_src_region(
+                saving_dir=summed_dir, ra=ra, dec=dec)
 
             df.loc[i, "final_fits"] = str(final_fits)
             df.loc[i, "reg_files"] = str(reg_files)
@@ -489,7 +508,8 @@ class UVOTZ:
 
                 # all_reg_files = self.str_to_list(df.loc[0,"reg_files"])
 
-                # defining all kinds of inputs and outputs also the column names
+                # defining all kinds of inputs and outputs also the column
+                # names
                 filter_ = self.extract_filter(fits_file)
                 filter_err = filter_ + "_err"
                 src_region_file = summed_dir + f"/{filter_}.reg"

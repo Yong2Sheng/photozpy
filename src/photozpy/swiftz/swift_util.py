@@ -200,7 +200,8 @@ class SwiftDownload:
         """
         new_dict = {}
 
-        # if the slice_value(s) and slice_key are given, use them to find the index(indices) the slice_value(s)
+        # if the slice_value(s) and slice_key are given, use them to find the
+        # index(indices) the slice_value(s)
         if slice_value is not None:
             if not isinstance(slice_value, list):
                 slice_value = [slice_value]
@@ -226,7 +227,8 @@ class SwiftDownload:
 
         return new_dict
 
-    def download_swift_data(self, radius=5 / 60, uvotmode="0x30ed", organize=False):
+    def download_swift_data(self, radius=5 / 60,
+                            uvotmode="0x30ed", organize=False):
         """
         Download the Swift data. Note it will overwrite the source data in the same location you downloaded before.
         I should make it more flexible ...
@@ -269,7 +271,8 @@ class SwiftDownload:
 
             for i in np.flip(np.arange(-len(oq), 0)):
                 if oq[i].obsid == id_:
-                    print(f"{oq[i].obsid} has been downloaded/examined, skipping ...")
+                    print(
+                        f"{oq[i].obsid} has been downloaded/examined, skipping ...")
                 else:
                     if oq[i].uvot_mode == uvotmode:
                         date_ = oq[i].begin.strftime("%Y-%m-%d %H:%M:%S")

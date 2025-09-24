@@ -75,7 +75,12 @@ class Artifacts:
         gain = ccd.header["GAIN"]  # unit: electrom/adu
         rdnoise = ccd.header["RDNOISE"]  # unit: electron
 
-        newccd = lacosmic(ccd, gain_apply=False, gain=gain, readnoise=rdnoise, **kwargs)
+        newccd = lacosmic(
+            ccd,
+            gain_apply=False,
+            gain=gain,
+            readnoise=rdnoise,
+            **kwargs)
         hdu = newccd.to_hdu(hdu_uncertainty=None)
 
         if plot_before_after:

@@ -37,12 +37,15 @@ class MagnitudeInfo:
 
         self._filters = filters
         self._mag_type = mag_type
-        self._inst_mags = MagnitudeInfo._standarize_mags(inst_mags, self._filters)
+        self._inst_mags = MagnitudeInfo._standarize_mags(
+            inst_mags, self._filters)
         self._inst_mag_errors = MagnitudeInfo._standarize_mags(
             inst_mag_errors, self._filters
         )
-        self._zero_points = MagnitudeInfo._standarize_mags(zero_points, self._filters)
-        self._cab_mags = MagnitudeInfo._standarize_mags(cab_mags, self._filters)
+        self._zero_points = MagnitudeInfo._standarize_mags(
+            zero_points, self._filters)
+        self._cab_mags = MagnitudeInfo._standarize_mags(
+            cab_mags, self._filters)
         self._cab_mag_errors = MagnitudeInfo._standarize_mags(
             cab_mag_errors, self._filters
         )
@@ -95,7 +98,8 @@ class MagnitudeInfo:
                     ):  # [[-99, 23]*u.mag, [-99, 56]*u.mag, [-99, 46]*u.mag, [-99, 233]*u.mag]
                         return QTable(mags, names=filters)
 
-                    elif isinstance(mags[0], list):  # [[-99, 23], [-99, 56], [-99, 46]]
+                    # [[-99, 23], [-99, 56], [-99, 46]]
+                    elif isinstance(mags[0], list):
                         return QTable([i * u.mag for i in mags], names=filters)
 
             elif isinstance(mags[0], float):  # [-99, 233]] or [23, 56, 46, 233]
@@ -105,7 +109,8 @@ class MagnitudeInfo:
             return mags
 
         else:
-            raise TypeError("Only QTable and list are supported for magnitude inputs!")
+            raise TypeError(
+                "Only QTable and list are supported for magnitude inputs!")
 
     @property
     def inst_mags(self):
@@ -113,7 +118,8 @@ class MagnitudeInfo:
 
     @inst_mags.setter
     def inst_mags(self, new_inst_mags):
-        self._inst_mags = MagnitudeInfo._standarize_mags(new_inst_mags, self._filters)
+        self._inst_mags = MagnitudeInfo._standarize_mags(
+            new_inst_mags, self._filters)
 
     @property
     def inst_mag_errors(self):
@@ -131,7 +137,8 @@ class MagnitudeInfo:
 
     @cab_mags.setter
     def cab_mags(self, new_cab_mags):
-        self._cab_mags = MagnitudeInfo._standarize_mags(new_cab_mags, self._filters)
+        self._cab_mags = MagnitudeInfo._standarize_mags(
+            new_cab_mags, self._filters)
 
     @property
     def cab_mag_errors(self):
@@ -223,7 +230,8 @@ class MagnitudeInfo:
                 new_array += [element]
             else:
                 if verbose is True:
-                    logger.info(f"{element} is an outlier with zscore of {zscore}!")
+                    logger.info(
+                        f"{element} is an outlier with zscore of {zscore}!")
                 else:
                     pass
 
@@ -259,7 +267,8 @@ class MagnitudeInfo:
 
             self._diff_dict[filter_name] = zero.value
 
-            # here we only use standard stars with detection significance >= 3.0
+            # here we only use standard stars with detection significance >=
+            # 3.0
             useful_index = self._significance[filter_name] >= 3.0
             zero = zero[useful_index]
 
@@ -317,7 +326,7 @@ class MagnitudeInfo:
 
         fig, axes = plt.subplots(
             nrows, 2, figsize=(12, 10), sharex=False
-        )  ##sharex=True
+        )  # sharex=True
 
         for idx, filter_name in enumerate(self._filters):
 

@@ -31,7 +31,8 @@ class Combine:
         telescope:
         """
 
-        self._image_collection = CollectionManager.refresh_collection(image_collection)
+        self._image_collection = CollectionManager.refresh_collection(
+            image_collection)
         self._telescope = telescope
 
     @staticmethod
@@ -102,10 +103,12 @@ class Combine:
             collection_to_combine, header="object"
         )  # It seems only the lower cases work for the header values
         object_names = [*set(object_names)]  # remove duplicate elements
-        # note that object_names includes all the objects! (targets, bias ,dark and flat)
+        # note that object_names includes all the objects! (targets, bias ,dark
+        # and flat)
 
         for object_name in object_names:  # note that bias and dark don't have filters
-            # this is the list of the absolute path to the fits images to be combine
+            # this is the list of the absolute path to the fits images to be
+            # combine
             image_list_to_combine = list(
                 collection_to_combine.files_filtered(
                     object=object_name, include_path=True
@@ -282,7 +285,8 @@ class Combine:
                         image_list_to_combine[0]
                     ).suffix  # get the filename suffix: crab_sdss_g.fits --get--> .fits
                     name_path = (
-                        Path(save_location) / f"{fname_stem}_master{fname_suffix}"
+                        Path(save_location) /
+                        f"{fname_stem}_master{fname_suffix}"
                     )  # the path to the copied file
                     new_name_path = name_path.with_name(
                         f"Master_{object_name}_{filter}{fname_suffix}"
@@ -340,7 +344,8 @@ class Combine:
                             image_number
                         )  # update the RDNOISE
                         gain = combined.meta["GAIN"]
-                        combined.meta["GAIN"] = gain  # the gain should remain the same
+                        # the gain should remain the same
+                        combined.meta["GAIN"] = gain
                     combined.write(
                         save_location / f"Master_{object_name}_{filter}.fits",
                         overwrite=True,

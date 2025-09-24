@@ -30,7 +30,8 @@ class SourceDetection:
     def __init__(self, image_collection):
 
         # refresh the full collection
-        self._image_collection = CollectionManager.refresh_collection(image_collection)
+        self._image_collection = CollectionManager.refresh_collection(
+            image_collection)
 
     @staticmethod
     def find_local_peaks(
@@ -63,7 +64,8 @@ class SourceDetection:
         filter = ccddata.header["FILTER"]
         object = ccddata.header["OBJECT"]
         if not verbose:
-            print(f"Determining the local peaks of {object} in {filter} filter.....")
+            print(
+                f"Determining the local peaks of {object} in {filter} filter.....")
 
         # find the local peak positions
         mean, median, std = sigma_clipped_stats(
@@ -94,7 +96,8 @@ class SourceDetection:
         verbose=False,
     ):
 
-        # refresh the full collection to make sure it includes all the newly generated images (Master Light)
+        # refresh the full collection to make sure it includes all the newly
+        # generated images (Master Light)
         self._image_collection = CollectionManager.refresh_collection(
             self._image_collection, rescan=True
         )
@@ -137,7 +140,8 @@ class SourceDetection:
             )
             centroids = np.transpose(np.array([x_centroids, y_centroids]))
             if not verbose:
-                print(f"Determining the centroids of {object} in {filter} filter.....")
+                print(
+                    f"Determining the centroids of {object} in {filter} filter.....")
 
             centroids_dict["image_path"].append(image_path)
             centroids_dict["centroids"].append(centroids)
@@ -182,7 +186,8 @@ class SourceDetection:
                     save_path = image_path.with_suffix(
                         ".png"
                     )  # change the suffix of the image to png
-                    save_path.with_stem(f"{save_path.stem}_centroid_at_{xcen}_{ycen}")
+                    save_path.with_stem(
+                        f"{save_path.stem}_centroid_at_{xcen}_{ycen}")
                     plt.savefig(save_path, dpi=400, bbox_inches="tight")
                     plt.clf()  # clear canvas
 
@@ -211,17 +216,20 @@ class SourceDetection:
         if sum(boo) == 0:
             bkg = None
         else:
-            sigma3 = radial_profile.radius[boo][0] * 3  # get the radius of 3 sigma
+            # get the radius of 3 sigma
+            sigma3 = radial_profile.radius[boo][0] * 3
             bkgs = radial_profile.profile[radial_profile.radius > sigma3]
             if bkgs.shape[0] == 0:
                 bkg = None
             else:
-                bkg = np.mean(radial_profile.profile[radial_profile.radius > sigma3])
+                bkg = np.mean(
+                    radial_profile.profile[radial_profile.radius > sigma3])
 
         return bkg
 
     @staticmethod
-    def find_fwhm_from_image(image, xycen, edge_radii_end=26, edge_radii_step=0.5):
+    def find_fwhm_from_image(
+            image, xycen, edge_radii_end=26, edge_radii_step=0.5):
         """
         Find the FWHM at the xy centroids in a image
 
@@ -255,7 +263,8 @@ class SourceDetection:
             half_max = (rp.profile.max() + bkg) / 2
 
             # get FWHM
-            interp_f = interpolate.interp1d(rp.radius, rp.profile, kind="linear")
+            interp_f = interpolate.interp1d(
+                rp.radius, rp.profile, kind="linear")
             for i in rp.radius:
                 _value = interp_f(i)
                 difference = _value - half_max
@@ -320,7 +329,8 @@ class SourceDetection:
         average_fwhm: float; the averaged fwhm found from the image collection
         """
 
-        # refresh the full collection to make sure it includes all the Master Light images
+        # refresh the full collection to make sure it includes all the Master
+        # Light images
         self._image_collection = CollectionManager.refresh_collection(
             self._image_collection, rescan=True
         )

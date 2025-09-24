@@ -41,7 +41,8 @@ class PhotozRegions:
             The csv file that contains the source names and source coordinates
         """
 
-        # switch image_collection from ImageFileCollection to mImageFileCollection to make it standard for the pipeline
+        # switch image_collection from ImageFileCollection to
+        # mImageFileCollection to make it standard for the pipeline
         if isinstance(image_collection, ImageFileCollection):
             self._mcollection = mImageFileCollection(
                 location=image_collection.location, filenames=image_collection.files
@@ -54,7 +55,8 @@ class PhotozRegions:
 
         self._source_catalog_path = source_catalog_path
 
-        self._source_catalog_df = pd.read_csv(self._source_catalog_path, sep=",")
+        self._source_catalog_df = pd.read_csv(
+            self._source_catalog_path, sep=",")
 
     @staticmethod
     def generate_regions(region_dir, filter_name, coord, radius=5.0):
@@ -84,7 +86,8 @@ class PhotozRegions:
         # this only works for one set of skycoords. There will be errors if you have more than a set of skycoords
         # a set of coord: str_coord.to_string(precision = 6)  ==> '105.130269 -66.179291'  <== this is string
         # two sets of coord: str_coord.to_string(precision = 6)  ==> ['105.130269 -66.179291', '105.169080 -66.158375']  <== this is list
-        # since I always do photometry for only one source with Swift, so I am safe for now....
+        # since I always do photometry for only one source with Swift, so I am
+        # safe for now....
         x = str_coord[0]
         y = str_coord[1]
 
@@ -169,7 +172,8 @@ class PhotozRegions:
                 filter_name = ccddata.header["FILTER"]
 
                 # get the bkg substratced data
-                bkg, array_data_no_bkg = estimate_background(array_data=array_data)
+                bkg, array_data_no_bkg = estimate_background(
+                    array_data=array_data)
 
                 # read the source coordinate from the source catalog
                 ra = self._source_catalog_df[
@@ -235,12 +239,14 @@ class PhotozRegions:
                     coord=centroid_skycoord,
                     radius=5.0,
                 )
-                # generate the background region for all the filters from the background template
+                # generate the background region for all the filters from the
+                # background template
                 if bkg_region_template is not None:
                     bkg_template_path = (
                         image_path.parent / bkg_region_template
                     )  # the template must be stored in the image directory
-                    bkg_region_path = image_path.parent / f"{filter_name}_bkg.reg"
+                    bkg_region_path = image_path.parent / \
+                        f"{filter_name}_bkg.reg"
                     shutil.copy(bkg_template_path, bkg_region_path)
 
                 if save_image:
@@ -340,7 +346,10 @@ class PhotozRegions:
             bkg_pixelregion = bkg_skyregion.to_pixel(wcs)
 
         # start to make plots
-        fig, axs = plt.subplots(2, 2, figsize=(15, 15), subplot_kw=dict(projection=wcs))
+        fig, axs = plt.subplots(
+            2, 2, figsize=(
+                15, 15), subplot_kw=dict(
+                projection=wcs))
         fig.suptitle(
             f"Region summary for filter {filter_name} of source {source_name}",
             y=0.92,
@@ -452,7 +461,8 @@ class PhotozRegions:
             source_pixelregion.center.y + image_cutout[2],
         )
         # axs[1,0].legend()
-        axs[1, 0].set_title("Source region zoomed in", fontsize=subtitle_fontsize)
+        axs[1, 0].set_title("Source region zoomed in",
+                            fontsize=subtitle_fontsize)
 
         # the background regions zoomed in side width = 120
         axs[1, 1].imshow(
@@ -471,7 +481,8 @@ class PhotozRegions:
             bkg_pixelregion.center.y + image_cutout[3],
         )
         # axs[1,1].legend()
-        axs[1, 1].set_title("Background region zoomed in", fontsize=subtitle_fontsize)
+        axs[1, 1].set_title("Background region zoomed in",
+                            fontsize=subtitle_fontsize)
         axs[1, 1].tick_params(which="major", labelsize=12)
 
         # create RA Dec grids
@@ -480,7 +491,8 @@ class PhotozRegions:
             ax.coords[0].set_axislabel(
                 "Right Ascension (J2000)", fontsize=tick_fontsize
             )
-            ax.coords[1].set_axislabel("Declination (J2000)", fontsize=tick_fontsize)
+            ax.coords[1].set_axislabel(
+                "Declination (J2000)", fontsize=tick_fontsize)
             ax.tick_params(which="major", labelsize=tick_fontsize)
             ax.legend(fontsize=subplot_labelsize)
             if other_coords is not None:
@@ -511,7 +523,8 @@ class CCD_Regions:
 
     def __init__(self, image_collection, sources):
 
-        # switch image_collection from ImageFileCollection to mImageFileCollection to make it standard for the pipeline
+        # switch image_collection from ImageFileCollection to
+        # mImageFileCollection to make it standard for the pipeline
         if isinstance(image_collection, ImageFileCollection):
             self._mcollection = mImageFileCollection(
                 image_dir=image_collection.location, filenames=image_collection.files
@@ -586,7 +599,8 @@ class CCD_Regions:
 
                     # get the pixel scale
                     x, y = (
-                        wcs.utils.proj_plane_pixel_scales(image_wcs) * u.deg / u.pixel
+                        wcs.utils.proj_plane_pixel_scales(
+                            image_wcs) * u.deg / u.pixel
                     )  # x and y are pixel scale along two axis. They are usually very close.
                     pixel_scale = u.pixel_scale(
                         x
@@ -597,7 +611,8 @@ class CCD_Regions:
                         f"S{i}" for i in np.arange(source_coords_centroids.shape[0])
                     ]
 
-                    # generate and save the region files for source aperture and background annulus
+                    # generate and save the region files for source aperture
+                    # and background annulus
                     src_region_path = generate_region_files(
                         region_save_dir=image_parent_path,
                         field_name=source_name,
@@ -690,7 +705,8 @@ def generate_region_files(
     dec = [coord.split(" ")[1] for coord in str_coord]
     # print(dec)
 
-    # check if the length of the source name equals to the length of the ra and dec
+    # check if the length of the source name equals to the length of the ra
+    # and dec
     if isinstance(source_name, str):
         source_name = [source_name]
     if len(source_name) != len(ra):
@@ -721,7 +737,8 @@ def generate_region_files(
                 )
             else:
                 if outer_radius.unit.name == "pix":
-                    outer_radius_angular = outer_radius.to(u.arcsec, pixel_scale).value
+                    outer_radius_angular = outer_radius.to(
+                        u.arcsec, pixel_scale).value
                 f.write(
                     f'annulus({_ra},{_dec},{inner_radius_angular}", {outer_radius_angular}") # text={{{_name}}}\n'
                 )
@@ -829,7 +846,8 @@ def get_centroids(
             y_centroids[idx] = y
 
     if verbose:
-        print(f"The centroid pixel for {filter_name} is ({x_centroids},{y_centroids}).")
+        print(
+            f"The centroid pixel for {filter_name} is ({x_centroids},{y_centroids}).")
 
     if return_type == "pix_coord":
         return np.array([x_centroids, y_centroids]).T
@@ -910,7 +928,8 @@ def plot_regions(
         n_bkg_regions = len(bkg_pixel_regions)
 
     # double check if the number of src and bkg regions are equal
-    # create None list for the source or background regions that are not defined
+    # create None list for the source or background regions that are not
+    # defined
     if n_src_regions is None and n_bkg_regions is None:
         if n_src_regions != n_bkg_regions:
             raise ValueError(
@@ -948,7 +967,9 @@ def plot_regions(
     subtitle_fontsize = 15
     marker_size = 10
 
-    norm = ImageNormalize(data=image_array_data, stretch=LogStretch(data_strentch))
+    norm = ImageNormalize(
+        data=image_array_data,
+        stretch=LogStretch(data_strentch))
     # vmax = image_array_data.flatten().max()*0.4,
     # vmin = image_array_data.flatten().min()*5,
     # clip = True)
@@ -959,7 +980,8 @@ def plot_regions(
         sky_region_additional = [
             CircleSkyRegion(i, 5 * u.arcsec) for i in additional_coords
         ]  # Since I just want to plot the centers, the radius 5 arcsec is my random choice
-        pix_region_additional = [i.to_pixel(image_wcs) for i in sky_region_additional]
+        pix_region_additional = [
+            i.to_pixel(image_wcs) for i in sky_region_additional]
 
         if additional_coords_labels is None:
             additional_coords_labels = ["additional coordinates"] * len(
@@ -1068,7 +1090,8 @@ def plot_regions(
         np.arange(0, len(src_pixel_regions)),
     ):
         # idx: the index of the rows of the subplots, it starts from 1 to the number of the rows of the subplots
-        # idx_regs: the index of the regions, it stars from 0 to the number of regions
+        # idx_regs: the index of the regions, it stars from 0 to the number of
+        # regions
 
         if src_region is not None:
             axs[idx, 0].imshow(
@@ -1161,8 +1184,12 @@ def plot_regions(
     # create RA Dec grids
     for ax in axs.flatten():
         ax.coords.grid(True, color="white", ls="dotted")
-        ax.coords[0].set_axislabel("Right Ascension (J2000)", fontsize=tick_fontsize)
-        ax.coords[1].set_axislabel("Declination (J2000)", fontsize=tick_fontsize)
+        ax.coords[0].set_axislabel(
+            "Right Ascension (J2000)",
+            fontsize=tick_fontsize)
+        ax.coords[1].set_axislabel(
+            "Declination (J2000)",
+            fontsize=tick_fontsize)
         ax.tick_params(which="major", labelsize=tick_fontsize)
         ax.legend(fontsize=subplot_labelsize)
         ax.legend()

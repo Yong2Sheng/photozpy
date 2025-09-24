@@ -45,7 +45,8 @@ class Sources:
         for index, row in df.iterrows():
 
             if not np.isnan(row["ra"]):
-                _skycoord = SkyCoord(ra=[row["ra"]], dec=[row["dec"]], unit=units)
+                _skycoord = SkyCoord(ra=[row["ra"]], dec=[
+                                     row["dec"]], unit=units)
             else:
                 _skycoord = None
 
@@ -70,7 +71,7 @@ class Sources:
 
         while idx <= length - 2:
 
-            if in_list[idx] in in_list[idx + 1 :]:
+            if in_list[idx] in in_list[idx + 1:]:
                 return False
             else:
                 idx += 1
@@ -247,7 +248,8 @@ class Sources:
             # print magnitudes
             print(f"The magnitudes in {telescope.filters} are:")
             for filter_names in telescope.filters:
-                for i in np.around(target.magnitudes.cab_mags[filter_names].value, 4):
+                for i in np.around(
+                        target.magnitudes.cab_mags[filter_names].value, 4):
                     print(i)
 
             # print magnitude errors

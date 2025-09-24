@@ -51,7 +51,8 @@ class Telescope:
             if isinstance(lib_path, (Path, str)):
                 lib_path = Path(lib_path)
             else:
-                raise TypeError("Only str or pathlib.Path is supported for lib_path!")
+                raise TypeError(
+                    "Only str or pathlib.Path is supported for lib_path!")
             print("Reading telescope and ccd information from customed library.")
             self.lib_df = pd.read_csv(lib_path, sep=",", header=0)
         else:
@@ -115,7 +116,8 @@ class Telescope:
                 )
             elif filtered.shape[0] == 1:
                 if para_name == "ccd_gain" or para_name == "ccd_rdnoise":
-                    para_value = float(filtered.loc[:, para_name].to_numpy()[0])
+                    para_value = float(
+                        filtered.loc[:, para_name].to_numpy()[0])
                 elif para_name == "filters":
                     para_value = (
                         filtered.loc[:, para_name]
@@ -207,7 +209,13 @@ class Telescope:
 
         qtable = QTable(
             [a, b, c, d, e, f],
-            names=("telescope", "mode", "ccd", "ccd_gain", "ccd_rdnoise", "filters"),
+            names=(
+                "telescope",
+                "mode",
+                "ccd",
+                "ccd_gain",
+                "ccd_rdnoise",
+                "filters"),
             meta={"name": "Telescope information"},
             dtype=[str, str, str, float, float, list],
         )
@@ -260,8 +268,11 @@ class Telescope:
         else:
             mappers = filter_dict
 
-        mapped_filters = [value for key, value in mappers.items() if key == name]
-        mapped_filters = [*set(mapped_filters)]  # remove the duplicated filter names
+        mapped_filters = [
+            value for key,
+            value in mappers.items() if key == name]
+        # remove the duplicated filter names
+        mapped_filters = [*set(mapped_filters)]
 
         if len(mapped_filters) == 0:
             raise ValueError(

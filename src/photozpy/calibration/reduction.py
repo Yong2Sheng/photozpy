@@ -62,7 +62,8 @@ class Reduction:
         master_bias_collection = CollectionManager.filter_collection(
             self._image_collection, **{"IMTYPE": ["Master Bias"]}
         )
-        master_bias_path = master_bias_collection.files_filtered(include_path=True)
+        master_bias_path = master_bias_collection.files_filtered(
+            include_path=True)
         if len(master_bias_path) == 0:
             raise ValueError("You haven't a combined bias yet!")
         elif len(master_bias_path) > 1:
@@ -86,10 +87,12 @@ class Reduction:
             ccd.write(save_location / fname, overwrite=True)
 
         # refresh image collection
-        correct_collection = CollectionManager.refresh_collection(correct_collection)
+        correct_collection = CollectionManager.refresh_collection(
+            correct_collection)
 
         # add bias correction header. Because the CCDData writes mask and uncertainty into the hdul so ImageFileCollection
-        # iteration won't work. (it doesn't work on the multi-extension fits files!
+        # iteration won't work. (it doesn't work on the multi-extension fits
+        # files!
         for i in correct_collection.files_filtered(include_path=True):
             with fits.open(i, mode="update") as hdul:
                 hdul[0].header["BIASCORR"] = "Yes"
@@ -132,7 +135,8 @@ class Reduction:
         master_dark_collection = CollectionManager.filter_collection(
             self._image_collection, **{"IMTYPE": ["Master Dark"]}
         )
-        master_dark_path = master_dark_collection.files_filtered(include_path=True)
+        master_dark_path = master_dark_collection.files_filtered(
+            include_path=True)
         if len(master_dark_path) == 0:
             raise ValueError("You don't have a master dark frame yet!")
         elif len(master_dark_path) > 1:
@@ -200,7 +204,8 @@ class Reduction:
         light_image_collection = CollectionManager.filter_collection(
             self._image_collection, **{"IMTYPE": ["Light"]}
         )
-        # flat or light IMTYPE has filters, get the filters used in the collection
+        # flat or light IMTYPE has filters, get the filters used in the
+        # collection
         filters = CollectionManager.get_header_values(
             light_image_collection, "FILTER", unique=True
         )
@@ -213,7 +218,8 @@ class Reduction:
                 **{"IMTYPE": ["Master Flat"], "FILTER": [filter]},
             )
             if len(master_flat_collection.files) != 1:
-                raise ValueError(f"The number of master flat in {filter} is not 1!")
+                raise ValueError(
+                    f"The number of master flat in {filter} is not 1!")
 
             light_collection = CollectionManager.filter_collection(
                 self._image_collection, **{"IMTYPE": ["Light"], "FILTER": [filter]}
@@ -225,9 +231,11 @@ class Reduction:
                 for master_flat_ccd, flat_fname in master_flat_collection.ccds(
                     return_fname=True
                 ):
-                    for object_ccd, fname in light_collection.ccds(return_fname=True):
+                    for object_ccd, fname in light_collection.ccds(
+                            return_fname=True):
                         print(f"Using {flat_fname} correcting {fname}")
-                        object_ccd_corrected = flat_correct(object_ccd, master_flat_ccd)
+                        object_ccd_corrected = flat_correct(
+                            object_ccd, master_flat_ccd)
                         object_ccd_corrected.write(
                             save_location / fname, overwrite=True
                         )

@@ -47,7 +47,8 @@ class PlateSolving:
 
         # here I want to move the standard sources to the front of the list
         # So once one standard image is finished adding wcs, I can start deciding the standard stars and the standard magnitudes RIGHT AWAY!
-        # I don't have to wait until the end of plate solving since it's quiet time consuming.
+        # I don't have to wait until the end of plate solving since it's quiet
+        # time consuming.
         std_collection = CollectionManager.filter_collection(
             self._image_collection,
             **{

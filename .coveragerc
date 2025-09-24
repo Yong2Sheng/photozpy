@@ -1,5 +1,5 @@
 # .coveragerc
-[run] 
+[run]
 # measure branch coverage (both if/else paths)
 branch = True
 
@@ -11,5 +11,5 @@ source =
 # list missing lines in terminal report
 show_missing = True
 
-# hide empty files like trivial __init__.py          
+# hide empty files like trivial __init__.py
 skip_empty = True

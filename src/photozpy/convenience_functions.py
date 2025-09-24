@@ -60,7 +60,10 @@ def get_alain_image(
 
         fig = plt.figure(figsize=(15, 15))
         if source_name is not None:
-            fig.suptitle(f"Region summary for {source_name}", y=0.92, fontsize=20)
+            fig.suptitle(
+                f"Region summary for {source_name}",
+                y=0.92,
+                fontsize=20)
         norm = ImageNormalize(stretch=LogStretch(logstretch))
 
         # plot the full image
@@ -74,15 +77,24 @@ def get_alain_image(
         )
 
         ax0.coords.grid(True, color="white", ls="dotted")
-        ax0.coords[0].set_axislabel("Right Ascension (J2000)", fontsize=tick_fontsize)
-        ax0.coords[1].set_axislabel("Declination (J2000)", fontsize=tick_fontsize)
+        ax0.coords[0].set_axislabel(
+            "Right Ascension (J2000)",
+            fontsize=tick_fontsize)
+        ax0.coords[1].set_axislabel(
+            "Declination (J2000)",
+            fontsize=tick_fontsize)
         ax0.tick_params(which="major", labelsize=tick_fontsize)
         ax0.legend(fontsize=subplot_labelsize)
 
         if sky_region is None:
-            fig.savefig(save_dir / "Aladin_image.png", dpi=300, bbox_inches="tight")
+            fig.savefig(
+                save_dir /
+                "Aladin_image.png",
+                dpi=300,
+                bbox_inches="tight")
         else:
-            # if sky region is given, it will plot the sky region in the full and zoomed image.
+            # if sky region is given, it will plot the sky region in the full
+            # and zoomed image.
 
             # plot the region in the full image
             pixereg = sky_region.to_pixel(wcs)
@@ -97,7 +109,11 @@ def get_alain_image(
                 cmap="Greys_r",
                 interpolation="nearest",
             )
-            pixereg.plot(ax=ax1, color="red", lw=0.5, label="Zoomed source region")
+            pixereg.plot(
+                ax=ax1,
+                color="red",
+                lw=0.5,
+                label="Zoomed source region")
             ax1.set_xlim(
                 pixereg.center.x - x_npix * 0.1, pixereg.center.x + x_npix * 0.1
             )
@@ -116,7 +132,11 @@ def get_alain_image(
                 ax.tick_params(which="major", labelsize=tick_fontsize)
                 ax.legend(fontsize=subplot_labelsize)
 
-            fig.savefig(save_dir / "Aladin_image.png", dpi=300, bbox_inches="tight")
+            fig.savefig(
+                save_dir /
+                "Aladin_image.png",
+                dpi=300,
+                bbox_inches="tight")
             plt.close()
 
     return result
@@ -372,7 +392,8 @@ def plot_image(
     matplotlib.use("Agg")
 
     # initiate the array of centers
-    centers_all = np.array([[0, 0]])  # [0,0] is just used to initiate a 2d array
+    # [0,0] is just used to initiate a 2d array
+    centers_all = np.array([[0, 0]])
 
     if fits_path is not None:
         # Get file names
@@ -416,7 +437,10 @@ def plot_image(
     else:
         raise ValueError("You must provide either fits file path or CCDData!")
 
-    norm = simple_norm(fits_data, "log", percent=norm_percent)  # define stretched norm
+    norm = simple_norm(
+        fits_data,
+        "log",
+        percent=norm_percent)  # define stretched norm
 
     # Plot the image
     plt.figure()
@@ -426,8 +450,10 @@ def plot_image(
     # Plot the pixel coordinates converted from sky coordinates
     if skycoords is not None:
         # convert sky coordinates to pixel coordinates
-        pixelcoords_from_skycoords = convert_coords(fits_path, skycoords=skycoords)
-        centers_all = np.concatenate((centers_all, pixelcoords_from_skycoords), axis=0)
+        pixelcoords_from_skycoords = convert_coords(
+            fits_path, skycoords=skycoords)
+        centers_all = np.concatenate(
+            (centers_all, pixelcoords_from_skycoords), axis=0)
 
         plt.scatter(
             pixelcoords_from_skycoords[:, 0],
@@ -443,7 +469,8 @@ def plot_image(
             y_ = pixelcoords_from_skycoords[row_idx][1]
             ra = skycoords[row_idx].ra.to_string(unit=u.hourangle, sep=":")
             dec = skycoords[row_idx].dec.to_string(unit=u.degree, sep=":")
-            plt.annotate(f"RA={ra}, Dec={dec}", (x_, y_), color="lime", size=10)
+            plt.annotate(f"RA={ra}, Dec={dec}",
+                         (x_, y_), color="lime", size=10)
 
     if isinstance(pixelcoords, np.ndarray):
         centers_all = np.concatenate((centers_all, pixelcoords), axis=0)
@@ -497,7 +524,8 @@ def plot_image(
         data_ymax = fits_data.shape[1]
 
         # get plotting range of x
-        xmin = centers_all[1:, 0].min() - 100  # need to exclude the first row of [0,0]
+        # need to exclude the first row of [0,0]
+        xmin = centers_all[1:, 0].min() - 100
         if xmin < 0:
             xmin = 0
         xmax = centers_all[1:, 0].max() + 100

@@ -28,7 +28,8 @@ class SwiftCombine:
             The swift telescope spec.
         """
 
-        # switch image_collection from ImageFileCollection to mImageFileCollection to make it standard for the pipeline
+        # switch image_collection from ImageFileCollection to
+        # mImageFileCollection to make it standard for the pipeline
         if isinstance(image_collection, ImageFileCollection):
             self._mcollection = mImageFileCollection(
                 location=image_collection.location, filenames=image_collection.files
@@ -163,7 +164,8 @@ class SwiftCombine:
             else:
                 return out_path.name
 
-    def sum_fits_files(self, image_collection, out_path=None, delete_files=False):
+    def sum_fits_files(self, image_collection,
+                       out_path=None, delete_files=False):
         """
         Sum the fits files.
 
@@ -185,7 +187,8 @@ class SwiftCombine:
             image_collection, "FILTER", unique=True
         )  # collection_filter is list even if there is only one value
         if len(collection_filter) != 1:
-            raise ValueError("The fits files to sum have more than one filters!")
+            raise ValueError(
+                "The fits files to sum have more than one filters!")
         else:
             collection_filter = collection_filter[0]
 
@@ -207,7 +210,8 @@ class SwiftCombine:
 
             # determine the output path
             if out_path is None:
-                out_path = Path(fits_file_path[0]).parent / f"{collection_filter}.fits"
+                out_path = Path(
+                    fits_file_path[0]).parent / f"{collection_filter}.fits"
 
             print(
                 f"uvotimsum exclude=NONE infile={appended_file} outfile={out_path} clobber=yes cleanup=yes | tee -a uvotimsum_log.txt >/dev/null 2>&1"
@@ -251,7 +255,8 @@ class SwiftCombine:
 
                 # First sum all the extensions in the same fits file
                 add_filter = {"FILTER": filter_, "SUMTYP": "NOTSUM"}
-                files = collection.files_filtered(include_path=True, **add_filter)
+                files = collection.files_filtered(
+                    include_path=True, **add_filter)
 
                 if len(files) == 0:
                     print(f"No {target_name} in {filter_}, skipping ......")
@@ -262,8 +267,10 @@ class SwiftCombine:
                     )
                     if summed_path is not None:
                         with fits.open(summed_path, mode="update") as hdul:
-                            hdul[0].header["OBJECT"] = target_name.replace("_", " ")
-                            hdul[1].header["OBJECT"] = target_name.replace("_", " ")
+                            hdul[0].header["OBJECT"] = target_name.replace(
+                                "_", " ")
+                            hdul[1].header["OBJECT"] = target_name.replace(
+                                "_", " ")
                             hdul[0].header["SUMTYP"] = "FINAL"
                             hdul[1].header["SUMTYP"] = "FINAL"
                             hdul.flush()
@@ -274,7 +281,8 @@ class SwiftCombine:
                     # sum the extensions for each file
                     summed_observations = []
                     for i in np.arange(num):
-                        _out_path = Path(files[i]).parent / f"{filter_}_{i}.fits"
+                        _out_path = Path(
+                            files[i]).parent / f"{filter_}_{i}.fits"
                         _summed = self.sum_extensions(
                             fits_file_path=files[i],
                             out_path=_out_path,
@@ -283,8 +291,10 @@ class SwiftCombine:
                         )
                         if _summed is not None:
                             with fits.open(_out_path, mode="update") as hdul:
-                                hdul[0].header["OBJECT"] = target_name.replace("_", " ")
-                                hdul[1].header["OBJECT"] = target_name.replace("_", " ")
+                                hdul[0].header["OBJECT"] = target_name.replace(
+                                    "_", " ")
+                                hdul[1].header["OBJECT"] = target_name.replace(
+                                    "_", " ")
                                 hdul[0].header["SUMTYP"] = "SUMMED"
                                 hdul[1].header["SUMTYP"] = "SUMMED"
                                 hdul.flush()
@@ -301,8 +311,10 @@ class SwiftCombine:
                     )
                     if summed_path is not None:
                         with fits.open(summed_path, mode="update") as hdul:
-                            hdul[0].header["OBJECT"] = target_name.replace("_", " ")
-                            hdul[1].header["OBJECT"] = target_name.replace("_", " ")
+                            hdul[0].header["OBJECT"] = target_name.replace(
+                                "_", " ")
+                            hdul[1].header["OBJECT"] = target_name.replace(
+                                "_", " ")
                             hdul[0].header["SUMTYP"] = "FINAL"
                             hdul[1].header["SUMTYP"] = "FINAL"
                             hdul.flush()

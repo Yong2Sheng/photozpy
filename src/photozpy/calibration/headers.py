@@ -18,7 +18,8 @@ from astropy.io import fits
 
 class HeaderCorrection:
 
-    def __init__(self, image_collection, sources, save_location="", overwrite=True):
+    def __init__(self, image_collection, sources,
+                 save_location="", overwrite=True):
         """
         The input image collection.
 
@@ -42,7 +43,8 @@ class HeaderCorrection:
             self._target_dict[source.file_pattern] = source.source_name
 
         if not isinstance(image_collection, ImageFileCollection):
-            raise TypeError("image_collection should be an ImageFileCollection object!")
+            raise TypeError(
+                "image_collection should be an ImageFileCollection object!")
         else:
             # refresh the full collection
             self._image_collection = CollectionManager.refresh_collection(
@@ -95,7 +97,10 @@ class HeaderCorrection:
             input_collection.location,
             filenames=flat_collection.files + light_collection.files,
         )
-        # note that although the filter header correction only works on flat and light image, it will eventually return a image collection that contains all the original files in the input_collection, incliding bias and dark images.
+        # note that although the filter header correction only works on flat
+        # and light image, it will eventually return a image collection that
+        # contains all the original files in the input_collection, incliding
+        # bias and dark images.
 
         for hdu, file_name in tqdm(
             fl_collection.hdus(
@@ -106,11 +111,15 @@ class HeaderCorrection:
                 old_filter = hdu.header["FILTER"]
                 # name = hdu.header["OBJECT"]
             else:
-                old_filter = file_name  # if the fits file has no value for the FILTER header, it will use the file name as the filter name since the file name contains the filter name as well.
+                # if the fits file has no value for the FILTER header, it will
+                # use the file name as the filter name since the file name
+                # contains the filter name as well.
+                old_filter = file_name
             if old_filter in self._telescope.filters:
                 pass
             else:
-                new_filter = HeaderManipulation.map_filters(old_filter, **filter_dict)
+                new_filter = HeaderManipulation.map_filters(
+                    old_filter, **filter_dict)
                 hdu.header["FILTER"] = new_filter
 
         if save_location == "":
@@ -129,7 +138,8 @@ class HeaderCorrection:
 
         return
 
-    def correct_headers_by_filename(self, save_location="", overwrite=True, type=None):
+    def correct_headers_by_filename(
+            self, save_location="", overwrite=True, type=None):
         """
         Correct the headers by the filename and/or type (Bias, Dark, Flat, Light).
         It basically uses the common string in the filename to identify the image type.
@@ -171,7 +181,8 @@ class HeaderCorrection:
                     "TELESCOP": self._telescope.telescope,
                     "BUNIT": "ADU",
                 }
-                # create a image collection that only contains this single image
+                # create a image collection that only contains this single
+                # image
                 one_image_collection = ImageFileCollection(
                     location=self._image_collection.location, filenames=i
                 )
@@ -197,7 +208,8 @@ class HeaderCorrection:
                     "TELESCOP": self._telescope.telescope,
                     "BUNIT": "ADU",
                 }
-                # create a image collection that only contains this single image
+                # create a image collection that only contains this single
+                # image
                 one_image_collection = ImageFileCollection(
                     location=self._image_collection.location, filenames=i
                 )
@@ -223,7 +235,8 @@ class HeaderCorrection:
                     "TELESCOP": self._telescope.telescope,
                     "BUNIT": "ADU",
                 }
-                # create a image collection that only contains this single image
+                # create a image collection that only contains this single
+                # image
                 one_image_collection = ImageFileCollection(
                     location=self._image_collection.location, filenames=i
                 )
@@ -263,7 +276,8 @@ class HeaderCorrection:
                     "TELESCOP": self._telescope.telescope,
                     "BUNIT": "ADU",
                 }
-                # create a image collection that only contains this single image
+                # create a image collection that only contains this single
+                # image
                 one_image_collection = ImageFileCollection(
                     location=self._image_collection.location, filenames=i
                 )
@@ -381,11 +395,13 @@ class HeaderManipulation:
             for key, value in headers_values.items():
                 hdu.header[key] = value
                 if time_transformation:
-                    date_time = Time(hdu.header["DATE-OBS"], format="isot", scale="ut1")
+                    date_time = Time(
+                        hdu.header["DATE-OBS"], format="isot", scale="ut1")
                     mjd_time = date_time.mjd
                     hdu.header["MJD-OBS"] = mjd_time
 
-        # Here I want to return a new collection of the modified files because the summary of the input image collection won't be updated by itself
+        # Here I want to return a new collection of the modified files because
+        # the summary of the input image collection won't be updated by itself
         if save_location == "":
             new_collection = ImageFileCollection(
                 location=input_collection.location, filenames=input_collection.files
@@ -445,8 +461,11 @@ class HeaderManipulation:
         else:
             mappers = filter_dict
 
-        mapped_filters = [value for key, value in mappers.items() if key == name]
-        mapped_filters = [*set(mapped_filters)]  # remove the duplicated filter names
+        mapped_filters = [
+            value for key,
+            value in mappers.items() if key == name]
+        # remove the duplicated filter names
+        mapped_filters = [*set(mapped_filters)]
 
         if len(mapped_filters) == 0:
             raise ValueError(

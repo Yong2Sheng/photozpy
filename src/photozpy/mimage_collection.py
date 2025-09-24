@@ -190,7 +190,8 @@ class mImageFileCollection:
 
         return values_list
 
-    # def get_collection_header_values(self, headers, index = None, unique = True):
+    # def get_collection_header_values(self, headers, index = None, unique =
+    # True):
 
     #     if isinstance(headers, str):
     #         headers = [headers]

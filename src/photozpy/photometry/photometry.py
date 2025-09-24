@@ -147,7 +147,8 @@ class Photometry:
             bkg_counts = np.array(
                 [bkg_counts]
             )  # the returned bkg_counts will be float instead numpy array. No need to worry about the total counts
-            # since it's obtained from the photo_table, which will return an array no matter the number of sources.
+            # since it's obtained from the photo_table, which will return an
+            # array no matter the number of sources.
 
         if isinstance(z_const, u.quantity.Quantity):
             z_const = z_const.value
@@ -168,15 +169,18 @@ class Photometry:
 
         for idx, sig in enumerate(src_significance):
 
-            # determine if we detect the source or not (magnitude value or magnitude upper limit)
+            # determine if we detect the source or not (magnitude value or
+            # magnitude upper limit)
             if sig >= detection_sigma:  # this is the detection of a source
                 src_mag = -2.5 * np.log10(src_counts[idx]) + z_const
                 mag_list += [src_mag]
-                src_mag_error = (2.5 / np.log(10)) * (src_error[idx] / src_counts[idx])
+                src_mag_error = (2.5 / np.log(10)) * \
+                    (src_error[idx] / src_counts[idx])
                 error_list += [src_mag_error]
 
             elif sig < detection_sigma:
-                src_upper = -2.5 * np.log10(bkg_error[idx] * detection_sigma) + z_const
+                src_upper = -2.5 * \
+                    np.log10(bkg_error[idx] * detection_sigma) + z_const
                 mag_list += [src_upper]
                 error_list += [-99]
 
@@ -239,13 +243,16 @@ class Photometry:
                 self._image_collection,
                 **{"IMTYPE": "Master Light", "OBJECT": source_name},
             )
-            image_list = collection_photometry.files_filtered(include_path=True)
+            image_list = collection_photometry.files_filtered(
+                include_path=True)
             # print(image_list)
 
             # initialize mag and error dict
             mag_dict = {filter_name: None for filter_name in telescope.filters}
-            mag_err_dict = {filter_name: None for filter_name in telescope.filters}
-            significance_dict = {filter_name: None for filter_name in telescope.filters}
+            mag_err_dict = {
+                filter_name: None for filter_name in telescope.filters}
+            significance_dict = {
+                filter_name: None for filter_name in telescope.filters}
 
             for image_path in image_list:
                 image_path = Path(image_path)
@@ -268,7 +275,8 @@ class Photometry:
                 # get the aperture and annulus aperture
 
                 src_region_fname = (
-                    image_path.parent / f"{source_name}_{image_filter_name}_src.reg"
+                    image_path.parent /
+                    f"{source_name}_{image_filter_name}_src.reg"
                 )
                 if not src_region_fname.exists():
                     raise OSError(f"{src_region_fname} not found!")
@@ -278,7 +286,8 @@ class Photometry:
                     src_apertures_pix = src_apertures_sky.to_pixel(image_wcs)
 
                 bkg_region_fname = (
-                    image_path.parent / f"{source_name}_{image_filter_name}_bkg.reg"
+                    image_path.parent /
+                    f"{source_name}_{image_filter_name}_bkg.reg"
                 )
                 if not bkg_region_fname.exists():
                     raise OSError(f"{bkg_region_fname} not found!")
@@ -289,7 +298,8 @@ class Photometry:
 
                 # get the sigma_clipped background estimation for all the annulus apertures
                 # Important! If the annulus aperture contains multiple annulus (standard star case), the returned bkgs will be an array
-                # If the annulus aperture contains only one annulus (target case), the returned bkgs will be a float
+                # If the annulus aperture contains only one annulus (target
+                # case), the returned bkgs will be a float
                 bkgs = Photometry.get_background(
                     image_array_data=image_array_data,
                     annulus_aperture=bkg_annulus_pix,
@@ -297,7 +307,8 @@ class Photometry:
                 )
 
                 # perform aperture photometry
-                phot_table = aperture_photometry(ccddata.data, src_apertures_pix)
+                phot_table = aperture_photometry(
+                    ccddata.data, src_apertures_pix)
 
                 # subtract the background from the photometry
                 total_bkgs = bkgs * src_apertures_pix.area
@@ -323,7 +334,8 @@ class Photometry:
                 #         logger.warning(f"The source+background for source_{idx} in {source_name} in {image_filter_name} is negative!")
 
                 phot_bkgsub = phot_table["src+bkg"] - total_bkgs
-                phot_bkgsub_error = np.sqrt(phot_table["src+bkg"].value + total_bkgs)
+                phot_bkgsub_error = np.sqrt(
+                    phot_table["src+bkg"].value + total_bkgs)
 
                 # calculate the instrumental magnitude
                 m_inst, m_inst_error, significance = Photometry.counts2mag(
@@ -334,7 +346,8 @@ class Photometry:
                 )
 
                 # organize the Qtable
-                phot_table["bkg"] = total_bkgs  # add the column for total background
+                # add the column for total background
+                phot_table["bkg"] = total_bkgs
                 phot_table["src"] = (
                     phot_bkgsub  # add the column for bkg subtracted photometry
                 )
@@ -351,7 +364,9 @@ class Photometry:
                 phot_table["src_error"].unit = u.ct
                 # phot_table['mag_inst'].unit = u.mag
                 # phot_table['mag_inst_error'].unit = u.mag
-                phot_table.meta = {"object": source_name, "filter": image_filter_name}
+                phot_table.meta = {
+                    "object": source_name,
+                    "filter": image_filter_name}
 
                 for colname in ["xcenter", "ycenter"]:
                     phot_table[colname].info.format = "%9.4f"
@@ -388,7 +403,8 @@ class Photometry:
 
             source.magnitudes.inst_mags = QTable(mag_dict)
             source.magnitudes.inst_mag_errors = QTable(mag_err_dict)
-            source.magnitudes.detection_significance = QTable(significance_dict)
+            source.magnitudes.detection_significance = QTable(
+                significance_dict)
 
         return
 
@@ -423,12 +439,12 @@ class SwiftPhotometry:
                 mag_line = lines[mag_idx]
                 if ">" in mag_line:
                     mag = float(
-                        re.findall("\d+\.?\d*", mag_line)[0]
+                        re.findall("\\d+\\.?\\d*", mag_line)[0]
                     )  # One or more digits (\d+), optional period (\.?), zero or more digits (\d*).
                     mag_error = -99
                 else:
                     number_list = re.findall(
-                        "\d+\.?\d*", mag_line
+                        "\\d+\\.?\\d*", mag_line
                     )  # One or more digits (\d+), optional period (\.?), zero or more digits (\d*).
                     mag = float(number_list[0])
                     stat_err = float(number_list[1])
@@ -469,7 +485,8 @@ class SwiftPhotometry:
                 include_path=True, **{"SUMTYP": "FINAL"}
             )  # only use the final summed fits files
 
-            # init the dict to store the photometry for a single source, which will be appended to the main result data frame
+            # init the dict to store the photometry for a single source, which
+            # will be appended to the main result data frame
             dict_new = {
                 "name": source_name_from_path,
                 "UVW2": -99,
@@ -488,7 +505,8 @@ class SwiftPhotometry:
 
             for file_path in file_paths:
 
-                # set up the file path, region path, and read the source name from the path
+                # set up the file path, region path, and read the source name
+                # from the path
                 file_path = Path(file_path)  # file path
                 headers = fits.getheader(file_path, ext=1)
                 filter_name = headers["FILTER"]  # filter name
@@ -549,9 +567,18 @@ class SwiftPhotometry:
         if self._source_catalog is not None:
             self._source_catalog = Path(self._source_catalog)
             final_catalog = pd.read_csv(self._source_catalog, sep=",")
-            final_catalog = pd.merge(final_catalog, df_results, on="name", how="left")
-            final_catalog.to_csv(Path("") / "mag_results.csv", index=False, mode="w")
+            final_catalog = pd.merge(
+                final_catalog, df_results, on="name", how="left")
+            final_catalog.to_csv(
+                Path("") /
+                "mag_results.csv",
+                index=False,
+                mode="w")
         else:
-            df_results.to_csv(Path("") / "mag_results.csv", index=False, mode="w")
+            df_results.to_csv(
+                Path("") /
+                "mag_results.csv",
+                index=False,
+                mode="w")
 
         return

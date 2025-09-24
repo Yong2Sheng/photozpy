@@ -3,4 +3,8 @@ from .swift_util import SwiftDownload
 from .swift_combine import SwiftCombine
 from .photoz_regions import PhotozRegions, generate_regions
 
-__all__ = ["SwiftDownload", "SwiftCombine", "PhotozRegions", "generate_regions"]
+__all__ = [
+    "SwiftDownload",
+    "SwiftCombine",
+    "PhotozRegions",
+    "generate_regions"]

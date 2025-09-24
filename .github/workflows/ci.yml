@@ -32,10 +32,9 @@ jobs:
           pip install -e ".[dev]"     # 你的 setup.py extras_require['dev'] 会装 pytest/ruff 等
 
       # —— 可选：在 CI 上也跑一次静态检查（和本地 pre-commit 对齐）——
-      - name: Lint (ruff) and format check (black)
+      - name: Lint (ruff)
         run: |
           ruff check .
-          black --check .
 
       - name: Run tests with coverage (HTML + XML)
         run: |
