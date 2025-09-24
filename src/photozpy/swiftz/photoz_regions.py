@@ -527,6 +527,7 @@ class CCD_Regions:
         save_plots=True,
         hdu=0,
         box_size=51 * u.pixel,
+        aperture_scaling=3,
         save_location=None,
         **kwargs,
     ):
@@ -564,7 +565,7 @@ class CCD_Regions:
                     image_wcs = ccddata.wcs
                     image_array_data = ccddata.data
                     psf_fwhm = ccddata.header["FWHM"] * u.pixel
-                    aperture_radius = psf_fwhm * 3
+                    aperture_radius = psf_fwhm * aperture_scaling
                     inner_radius = psf_fwhm * 5
                     outer_radius = psf_fwhm * 8
 
