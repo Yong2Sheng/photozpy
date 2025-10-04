@@ -122,7 +122,7 @@ class Combine():
                     combined = ccdpro_combine(image_list_to_combine,  
                                               method = "average",
                                               sigma_clip=True, sigma_clip_low_thresh=sigma_clip_low, sigma_clip_high_thresh=sigma_clip_high,
-                                              sigma_clip_func=np.ma.median, sigma_clip_dev_func=mad_std)
+                                              sigma_clip_func=np.ma.median, sigma_clip_dev_func=mad_std, dtype = np.float32)
                 elif method == "minmax clip":
                     raise ValueError("This function isn't ready yet!")
 
@@ -214,13 +214,13 @@ class Combine():
                             combined = ccdpro_combine(image_list_to_combine, 
                                                       method = "average", scale = scale_function_,
                                                       sigma_clip=True, sigma_clip_low_thresh=sigma_clip_low, sigma_clip_high_thresh=sigma_clip_high,
-                                                      sigma_clip_func=np.ma.median, sigma_clip_dev_func=mad_std)
+                                                      sigma_clip_func=np.ma.median, sigma_clip_dev_func=mad_std, dtype = np.float32)
                         
                         elif image_type == "Light":
                             combined = ccdpro_combine(image_list_to_combine, 
                                                       method = "average", 
                                                       sigma_clip = True, sigma_clip_low_thresh=sigma_clip_low, sigma_clip_high_thresh=sigma_clip_high, 
-                                                      sigma_clip_func=np.ma.median, sigma_clip_dev_func=mad_std)
+                                                      sigma_clip_func=np.ma.median, sigma_clip_dev_func=mad_std, dtype = np.float32)
                     elif method == "minmax clip":
                         raise ValueError("This function isn't ready yet!")
 
@@ -234,6 +234,9 @@ class Combine():
                         combined.meta["RDNOISE"] = rdnoise/np.sqrt(image_number)  # update the RDNOISE
                         gain = combined.meta["GAIN"]
                         combined.meta["GAIN"] = gain*image_number # the gain should remain the same
+                    combined.data = combined.data.astype(np.float32)  # float32 is enough precision
+                    combined.uncertainty = None  # no need to track uncertainty here
+                    combined.mask = None
                     combined.write(save_location / f"Master_{object_name}_{filter}.fits", overwrite = True)
                     print(f"{object_name} in {filter} filter combined!")
                     print("----------------------------------------------------------\n")

@@ -77,6 +77,9 @@ class Reduction():
         for ccd, fname in correct_collection.ccds(return_fname=True):
             print(f"Apply {master_bias_file} correction to {fname}")
             ccd = subtract_bias(ccd, master_bias_ccd)
+            ccd.data = ccd.data.astype(np.float32)  # float32 is enough precision
+            ccd.uncertainty = None  # no need to track uncertainty here
+            ccd.mask = None
             ccd.write(save_location / fname, overwrite=True)
 
         # refresh image collection
@@ -142,7 +145,9 @@ class Reduction():
             ccd = subtract_dark(ccd, master_dark_ccd, 
                                 exposure_time = "EXPTIME",exposure_unit = u.second, 
                                 scale = True)
-
+            ccd.data = ccd.data.astype(np.float32)  # float32 is enough precision
+            ccd.uncertainty = None  # no need to track uncertainty here
+            ccd.mask = None
             ccd.write(save_location / fname, overwrite=True)
             
         for i in correct_collection.files_filtered(include_path = True):
@@ -199,6 +204,9 @@ class Reduction():
                     for object_ccd, fname in light_collection.ccds(return_fname = True):
                         print(f"Using {flat_fname} correcting {fname}")
                         object_ccd_corrected = flat_correct(object_ccd, master_flat_ccd)
+                        object_ccd_corrected.data = object_ccd_corrected.data.astype(np.float32)  # float32 is enough precision
+                        object_ccd_corrected.uncertainty = None  # no need to track uncertainty here
+                        object_ccd_corrected.mask = None
                         object_ccd_corrected.write(save_location / fname, overwrite=True)
                         
                         with fits.open(Path(save_location) / fname, mode = "update") as hdul:
