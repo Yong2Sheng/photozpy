@@ -389,9 +389,11 @@ class Photometry():
             #print(image_list)
             
             #initialize mag and error dict
-            mag_dict = {filter_name: None for filter_name in telescope.filters}
-            mag_err_dict = {filter_name: None for filter_name in telescope.filters}
-            significance_dict =  {filter_name: None for filter_name in telescope.filters}
+            #we use [np.nan] avoid case when a source only has some of the filters
+            #len(np.nan) returns an error, so I put it into a list
+            mag_dict = {filter_name: [np.nan] for filter_name in telescope.filters}
+            mag_err_dict = {filter_name: [np.nan] for filter_name in telescope.filters}
+            significance_dict =  {filter_name: [np.nan] for filter_name in telescope.filters}
             
             for image_path in image_list:
                 image_path = Path(image_path)
@@ -486,6 +488,7 @@ class Photometry():
                 significance_dict[image_filter_name] = phot_table["src_significance"]
                 
                 phot_table.pprint_all()
+                self.phot_table = phot_table
             print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
             print("\n")
                 
