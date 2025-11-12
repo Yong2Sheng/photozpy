@@ -175,13 +175,18 @@ class HeaderCorrection():
             else:
                 # For light type, we need to add the target name
                 target_name = [value for key,value in self._target_dict.items() if key in fits_path.stem]
-                target_name = [*set(target_name)]
+                target_name = [*set(target_name)] # is a list
                 if len(target_name) != 1:
                     pass
                     print(f"There is no {fits_path.stem} file or the dictionary doesn't contain this file! Skipping.....")
                 else:
                     target_name = target_name[0]
+                # get the ra and dec of the center FOV
+                ra = self._sources[target_name][0].skycoord.to_string(style = "hmsdms", sep=":")[0].split(" ")[0]
+                dec= self._sources[target_name][0].skycoord.to_string(style = "hmsdms", sep=":")[0].split(" ")[1]
                 header_dict = {"IMTYPE": ("Light", None),
+                               "RA": (ra, "RA of center FOV"),
+                               "DEC": (dec, "Dec of center FOV"),
                                "GAIN": (self._telescope.ccd_gain.value, self._telescope.ccd_gain.unit.to_string()),
                                "RDNOISE": (self._telescope.ccd_rdnoise.value, self._telescope.ccd_rdnoise.unit.to_string()),
                                "OBJECT": target_name,
