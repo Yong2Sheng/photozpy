@@ -686,15 +686,15 @@ def plot_regions(image_path = None, hdu = 1, image_array_data = None, image_wcs 
         plot_additional_coords = False
     
     # plot the first raw: aladin image
-    if aladin_image is None:
-        aladin_result = get_alain_image(wcs = image_wcs, save_image=False)
-    axs[0,0].imshow(aladin_result[0].data, origin='lower', norm = norm, cmap='Greys_r', interpolation='nearest')
-    axs[0,0].set_title('Aladin Image', fontsize = subtitle_fontsize)
-    if bkg_pixel_regions[0] is not None:  # use bkg region to show and lable the sources as the first option since it has larger radius and easier to see
-        for idx, bkg_region in enumerate(bkg_pixel_regions): 
-            bkg_region.plot(ax = axs[0,0], lw=1.0, label = bkg_region.meta["text"], color = np.random.rand(3,))
-            axs[0,0].text(bkg_region.center.x, bkg_region.center.y, bkg_region.meta["text"], color = "white", size = text_fontsize)
-            axs[0,0].set_title("Data Image", fontsize = subtitle_fontsize)
+    # if aladin_image is None:
+    #     aladin_result = get_alain_image(wcs = image_wcs, save_image=False)
+    # axs[0,0].imshow(aladin_result[0].data, origin='lower', norm = norm, cmap='Greys_r', interpolation='nearest')
+    # axs[0,0].set_title('Aladin Image', fontsize = subtitle_fontsize)
+    # if bkg_pixel_regions[0] is not None:  # use bkg region to show and lable the sources as the first option since it has larger radius and easier to see
+    #     for idx, bkg_region in enumerate(bkg_pixel_regions): 
+    #         bkg_region.plot(ax = axs[0,0], lw=1.0, label = bkg_region.meta["text"], color = np.random.rand(3,))
+    #         axs[0,0].text(bkg_region.center.x, bkg_region.center.y, bkg_region.meta["text"], color = "white", size = text_fontsize)
+    #         axs[0,0].set_title("Data Image", fontsize = subtitle_fontsize)
     
     # plot the first raw: data image
     axs[0,1].imshow(image_array_data, origin='lower', norm = norm, cmap='Greys_r', interpolation='nearest')
