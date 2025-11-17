@@ -1,5 +1,7 @@
 # .pre-commit-config.yaml (example with exclude)
-default_stages: [pre-commit]
+default_stages: [pre-commit]  # 影响的是没有内置 stages、且你自己没写 stages 的那些 hook
+                              # 对于有内置stages，这个默认stage不会起效，需要在下面的hook
+                              # 中显式定义，比如trailing-whitespace
 default_language_version:
   python: python3.9
 
@@ -63,7 +65,9 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
-      - id: end-of-file-fixer            # 确保文件末尾只有 1 个换行
+        stages: [pre-commit]            # 覆盖默认stage，确保只在commit时运行
+      - id: end-of-file-fixer           # 确保文件末尾只有 1 个换行
+        stages: [pre-commit]            # 覆盖默认stage，确保只在commit时运行
       - id: check-merge-conflict        # prevent committing conflict markers
       - id: check-yaml                  # validate .yml/.yaml
       - id: check-json                  # validate JSON files
@@ -72,7 +76,8 @@ repos:
       - id: mixed-line-ending           # 统一换行风格
         args: ["--fix=lf"]              # 统一 LF（推荐 macOS/Linux）
       - id: check-added-large-files     # 给「大文件」阈值一个你能接受的上限（默认 5MB）
-        args: ["--maxkb=30000"]  # 5MB；或换成你项目想要的大小
+        args: ["--maxkb=30000"]         # 5MB；或换成你项目想要的大小
+        stages: [pre-commit]            # 覆盖默认stage，确保只在commit时运行
 
   # (Optional) basic spelling to catch obvious typos in docs/README
   - repo: https://github.com/codespell-project/codespell
