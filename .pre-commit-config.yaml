@@ -1,4 +1,5 @@
 # .pre-commit-config.yaml (example with exclude)
+default_stages: [pre-commit]
 default_language_version:
   python: python3.9
 
