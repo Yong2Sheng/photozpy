@@ -3,7 +3,7 @@ Written by Yong Sheng at Clemson University, 2023 for the photozpy project.
 Advisor: Dr. Marco Ajello
 Other contributor(s):
 
-Main function: 
+Main function:
 - apply the calibrations (master bias, master dark and master flat)
 """
 
@@ -12,62 +12,70 @@ from astropy.wcs import WCS
 from ..collection_manager import CollectionManager
 from pathlib import Path
 from astropy.io import fits
-import os
 import subprocess
-import shlex
+
 
 class PlateSolving():
 
     def __init__(self, image_collection, sources):
 
         # refresh the full collection
-        self._image_collection = CollectionManager.refresh_collection(image_collection, rescan = True)
+        self._image_collection = CollectionManager.refresh_collection(
+            image_collection, rescan=True)
         self._sources = sources
 
-
-    def add_wcs_astrometrynet(self, api, image_type = "Master Light", fwhm = None, detect_threshold = 5, solve_timeout = 120, ra_header_name = "RA", dec_header_name = "DEC", ra_dec_units = ("hour", "deg")):
+    def add_wcs_astrometrynet(self, api, image_type="Master Light", fwhm=None, detect_threshold=5,
+                              solve_timeout=120, ra_header_name="RA", dec_header_name="DEC", ra_dec_units=("hour", "deg")):
 
         # refresh the full collection
-        self._image_collection = CollectionManager.refresh_collection(self._image_collection, rescan = True)
+        self._image_collection = CollectionManager.refresh_collection(
+            self._image_collection, rescan=True)
 
-        image_collection = CollectionManager.filter_collection(self._image_collection, **{"IMTYPE": image_type})
+        image_collection = CollectionManager.filter_collection(
+            self._image_collection, **{"IMTYPE": image_type})
         all_image_list = image_collection.files_filtered(include_path=True)
-        
+
         # here I want to move the standard sources to the front of the list
         # So once one standard image is finished adding wcs, I can start deciding the standard stars and the standard magnitudes RIGHT AWAY!
-        # I don't have to wait until the end of plate solving since it's quiet time consuming.
-        std_collection = CollectionManager.filter_collection(self._image_collection, **{"IMTYPE": "Master Light", "OBJECT":  self._sources.standard_stars[0].source_name})
+        # I don't have to wait until the end of plate solving since it's quiet
+        # time consuming.
+        std_collection = CollectionManager.filter_collection(
+            self._image_collection, **{
+                "IMTYPE": "Master Light", "OBJECT": self._sources.standard_stars[0].source_name})
         std_list = std_collection.files_filtered(include_path=True)
-        target_list = [i for i in all_image_list if not i in std_list]
+        target_list = [i for i in all_image_list if i not in std_list]
         image_list = std_list + target_list
-        
+
         for image in image_list:
             print(f"Adding WCS to {image}")
-            if fwhm == None:
+            if fwhm is None:
                 # try to read the fwhm from the header
                 with fits.open(image) as hdul:
                     fwhm = hdul[0].header["FWHM"]
-            image_file = Path(image).name
             ast = AstrometryNet()
             ast.api_key = api
-            wcs_header = ast.solve_from_image(image, fwhm = fwhm, detect_threshold=detect_threshold, solve_timeout = solve_timeout)#, verbose = False)
+            wcs_header = ast.solve_from_image(
+                image,
+                fwhm=fwhm,
+                detect_threshold=detect_threshold,
+                solve_timeout=solve_timeout)  # , verbose = False)
             plate_solved_wcs_header = WCS(wcs_header).to_header()
-            
-            with fits.open(image, mode = "update") as hdul:
+
+            with fits.open(image, mode="update") as hdul:
                 for card in plate_solved_wcs_header.cards:
                     hdul[0].header[card[0]] = (card[1], "UPDATED!!")
                 hdul.flush()
-            print("-----------------------------------------------------------------------------------\n")
+            print(
+                "-----------------------------------------------------------------------------------\n")
 
         return
 
-    
     @staticmethod
-    def add_wcs_locally_for_file(file_path, ra=None, dec=None, radius=10, detect_threshold=8, 
-                                 extra_args = None, clean = True):
+    def add_wcs_locally_for_file(file_path, ra=None, dec=None, radius=10, detect_threshold=8,
+                                 extra_args=None, clean=True):
         """
         Solve WCS headers using a locally installed Astrometry.net engine.
-    
+
         Notes
         -----
         - The conda-forge package of Astrometry.net does not support ARM Macs,
@@ -82,7 +90,7 @@ class PlateSolving():
                 wget https://portal.nersc.gov/project/cosmo/temp/dstn/index-5200/LITE/index-$j-$I.fits
               done
             done
-    
+
         Parameters
         ----------
         file_path : str or pathlib.Path
@@ -104,27 +112,28 @@ class PlateSolving():
             If True, delete the original input file and rename/replace it
             with the solved output (effectively overwriting the original).
             If False, keep both original and solved files. Default is True.
-            
-    
+
+
         Returns
         -------
         subprocess.CompletedProcess
             The result of the `solve-field` command including return code,
             stdout and stderr where available.
-    
+
         Raises
         ------
         FileNotFoundError
             If the input file does not exist.
         RuntimeError
             If the WCS solving process fails (non-zero return code or missing WCS keywords).
-    
+
         """
 
         file_path = Path(file_path)
 
         if not file_path.exists():
-            raise FileNotFoundError(f"Input file does not exist: '{file_path}'")
+            raise FileNotFoundError(
+                f"Input file does not exist: '{file_path}'")
 
         if ra is None:
             try:
@@ -146,13 +155,18 @@ class PlateSolving():
                str(file_path),
                "--overwrite",
                "--no-plots",
-               "--new-fits", str(output_file), 
+               "--new-fits", str(output_file),
                "--nsigma", str(detect_threshold)]
 
         if (ra is not None) and (dec is not None):
-            cmd += ["--ra", str(ra), "--dec", str(dec), "--radius", str(radius)]
+            cmd += ["--ra", str(ra), "--dec", str(dec),
+                    "--radius", str(radius)]
 
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True)
 
         # if 0, then solving succeeds; if not 0, the solving fails
         if result.returncode != 0:
@@ -160,9 +174,17 @@ class PlateSolving():
                                f"stdout={result.stdout!r}, stderr={result.stderr!r}")
 
         # clean log and intermediate files
-        # delete the origina file and rename the solved file to the origian file name
+        # delete the origina file and rename the solved file to the origian
+        # file name
         if clean is True:
-            patterns = ["*.xyls", "*.corr", "*.match", "*.rdls", "*.wcs", "*.solved", "*.axy"]
+            patterns = [
+                "*.xyls",
+                "*.corr",
+                "*.match",
+                "*.rdls",
+                "*.wcs",
+                "*.solved",
+                "*.axy"]
             for pattern in patterns:
                 for f in file_path.parent.glob(pattern):
                     try:
@@ -174,14 +196,12 @@ class PlateSolving():
                 output_file.rename(file_path)
             except FileExistsError:
                 output_file.replace(file_path)
-        
+
         return result
 
-
-    def add_wcs_locally(self, image_type = "Master Light", detect_threshold=8):
-
+    def add_wcs_locally(self, image_type="Master Light", detect_threshold=8):
         """
-        Solve all the fits images in a ImageFileCollection filtered by the 
+        Solve all the fits images in a ImageFileCollection filtered by the
         `image_type` (IMTYPE).
 
         Parameters
@@ -204,35 +224,42 @@ class PlateSolving():
         """
 
         # refresh the full collection
-        self._image_collection = CollectionManager.refresh_collection(self._image_collection, rescan = True)
+        self._image_collection = CollectionManager.refresh_collection(
+            self._image_collection, rescan=True)
 
-        image_collection = CollectionManager.filter_collection(self._image_collection, **{"IMTYPE": image_type})
+        image_collection = CollectionManager.filter_collection(
+            self._image_collection, **{"IMTYPE": image_type})
         all_image_list = image_collection.files_filtered(include_path=True)
-        
+
         # here I want to move the standard sources to the front of the list
         # So once one standard image is finished adding wcs, I can start deciding the standard stars and the standard magnitudes RIGHT AWAY!
-        # I don't have to wait until the end of plate solving since it's quiet time consuming.
-        std_collection = CollectionManager.filter_collection(self._image_collection, **{"IMTYPE": "Master Light", "OBJECT":  self._sources.standard_stars[0].source_name})
+        # I don't have to wait until the end of plate solving since it's quiet
+        # time consuming.
+        std_collection = CollectionManager.filter_collection(
+            self._image_collection, **{
+                "IMTYPE": "Master Light", "OBJECT": self._sources.standard_stars[0].source_name})
         std_list = std_collection.files_filtered(include_path=True)
-        target_list = [i for i in all_image_list if not i in std_list]
+        target_list = [i for i in all_image_list if i not in std_list]
         image_list = std_list + target_list
         total_number = len(image_list)
 
         failure_list = []
-        for count, image in enumerate(image_list, start = 1):
+        for count, image in enumerate(image_list, start=1):
             image_path = Path(image)
             try:
-                result = PlateSolving.add_wcs_locally_for_file(image_path)
+                _ = PlateSolving.add_wcs_locally_for_file(image_path)
             except FileNotFoundError as e:
                 print(f"[{count}/{total_number}]:  {image_path.name} not found.")
                 failure_list.append((image_path, e))
                 continue
             except RuntimeError as e:
-                print(f"[{count}/{total_number}]: {image_path.name} WCS solving failed.")
+                print(
+                    f"[{count}/{total_number}]: {image_path.name} WCS solving failed.")
                 failure_list.append((image_path, e))
                 continue
             else:
-                print(f"[{count}/{total_number}]: {image_path.name} WCS solved successfully.")
+                print(
+                    f"[{count}/{total_number}]: {image_path.name} WCS solved successfully.")
 
         # print failures if present
         if failure_list:
