@@ -8,7 +8,6 @@ from .sources import MagnitudeInfo, BaseSourceInfo, Sources
 
 __version__ = "0.1.0"  # simple, importable version for tooling/tests
 
-
 __all__ = [
     "SwiftDownload",
     "SwiftCombine",
