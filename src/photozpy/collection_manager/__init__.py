@@ -1,1 +1,1 @@
-# from .collection_manager import CollectionManager
+from .collection_manager import CollectionManager
