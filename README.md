@@ -31,3 +31,5 @@ The photo-z analysis pipeline with python
 	```
 
 6. Once the installation is done, you can import and use `photozpy` module. Please go to the *docs* folder to try out the tutorial.
+
+7. To run unit test: pytest --cov=photozpy --cov-report term --cov-report html:tests/coverage_report
