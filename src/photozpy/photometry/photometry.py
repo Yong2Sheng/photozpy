@@ -155,29 +155,42 @@ class Photometry():
     @staticmethod
     def estimate_source_region_error(gain,                # e-/ADU
                                      readout_noise,       # e- (RMS per pixel)
-                                     n_ap,
-                                     # effective aperture pixels (A_eff), float
-                                     # or Quantity[pix]
-                                     n_ann,
-                                     # effective annulus pixels (A_eff), float
-                                     # or Quantity[pix]
-                                     mean_bkg,            # ADU/pix
-                                     # ADU (source+sky in aperture)
-                                     aperture_counts
+                                     n_ap,                # effective aperture pixels (A_eff), float or Quantity[pix]
+                                     n_ann,               # effective annulus pixels (A_eff), float or Quantity[pix]
+                                     mean_bkg,            # mean background in ADU
+                                     aperture_counts,     # total counts (source+sky) in aperture
+                                     n_com,               # the number of exposures to stack the image, float
                                      ):
         r"""
-        Estimate the error of the total counts in the source aperture.
+        Estimate the error of the source aperture sum in the average-stacked image.
 
         It has three terms:
         1. Shot-noise variance from all electrons that actually landed inside the aperture (source + sky).
         2. Readout noise from reading the source aperture pixels.
-        3. Error propagation from the background annulus.
+        3. Error propagation from the background subtraction from the background annulus.
 
-        Final error equation:
+        The variance in the average-stacked image (in electrons) is：
 
-            \sigma_{ap,e}^2 = C_{ap,e} + N_{ap}\sigma_{readout}^2
-                            + \frac{N_{ap}^2}{N_{ann}}
-                              \left(\hat{b}_{ann,e} + \sigma_{readout}^2\right)
+        \sigma_{e,\mathrm{ap,sum}}^2 =
+        \frac{1}{N_{\rm com}}\left[
+            c_{e,\rm ap}
+          + N_{\mathrm{ap}}\sigma_{\mathrm{readout}}^2
+          + \frac{N_{\mathrm{ap}}^2}{N_{\mathrm{ann}}}
+            \big(\hat{b}_{e,\mathrm{ann}} + \sigma_{\mathrm{readout}}^2\big)
+        \right].
+
+
+        Final error equation for backgroud-only case:
+        \sigma^2_{e, \rm UL,avg} =
+        \frac{1}{N_{\rm com}}\left[
+            N_{\rm ap}\,\hat b_{e,\rm ann}  %shotnoise term
+          + N_{\mathrm{ap}}\sigma_{\mathrm{readout}}^2
+          + \frac{N_{\mathrm{ap}}^2}{N_{\mathrm{ann}}}
+            \big(\hat{b}_{e,\mathrm{ann}} + \sigma_{\mathrm{readout}}^2\big)
+        \right].
+
+
+        For derivation, see Aperture Photometry Error Estimation and Upper Limits in SiYuan note.
 
         Parameters
         ----------
@@ -221,14 +234,18 @@ class Photometry():
             raise UnitsError(
                 f"Total source+sky counts should be in adu, got {aperture_counts.unit}")
 
+        if hasattr(n_com, "unit"):
+            raise UnitsError("n_com must be dimensionless (number of exposures).")
+
         # Shot-noise variance
         # treat C_ap,e as a variance-like term (Poisson), attach e^-2 for
         # consistency when summing with read-noise variances.
         shot_noise_variance = (aperture_counts * gain).value * (u.electron**2)
+        # shotnoise term for non-detection case
+        shot_noise_variance_ul = (n_ap * mean_bkg * gain).value * (u.electron**2)
 
         # readout noise of reading the source aperture pixels
         # note here n_ap is just counting the number of readout noise to add.
-        # n_ap has no physical meaning of pixels here
         readout_noise_aperture = n_ap.value * readout_noise**2
 
         # background error propagation variance
@@ -236,20 +253,20 @@ class Photometry():
                            gain.value + readout_noise.value**2)) * u.electron**2
 
         # final variance
-        var_sum = shot_noise_variance + readout_noise_aperture + bkg_propagation
+        # variance for detection
+        var_stacked = (shot_noise_variance + readout_noise_aperture + bkg_propagation) / n_com
+        # variance for non-detection. The first turn changes to background only counts
+        var_stacked_ul = (shot_noise_variance_ul + readout_noise_aperture + bkg_propagation) / n_com
 
         # error
-        error_adu = np.sqrt(var_sum) / gain
+        # after finishing the calculationes, we turn the error back to adu
+        error_adu = np.sqrt(var_stacked) / gain
+        error_ul_adu = np.sqrt(var_stacked_ul) / gain
 
+        # double check if the unit conversion goes through automatically by itself.
         if not error_adu.unit.is_equivalent(u.adu):
             raise UnitsError(
                 f"The final estimated error should be in adu, got {error_adu.unit}")
-
-        # also report upper-limit error used to get upper limits for
-        # non-detection case
-        var_ul_e2 = (mean_bkg.value * gain.value * n_ap.value) * u.electron**2 + \
-            readout_noise_aperture + bkg_propagation  # treat as variance-like term, attach e^-2
-        error_ul_adu = np.sqrt(var_ul_e2) / gain
 
         # return shot_noise_variance, readout_noise, bkg_annulus_pix for future
         # debugging purpose
@@ -257,45 +274,43 @@ class Photometry():
 
     @staticmethod
     def counts2mag(src_counts, error_counts, error_counts_ul,
-                   detection_significance=3, z_const=0):
+                   detection_significance=3):
         r"""
         Convert source counts to instrumental magnitudes and propagate errors.
 
-        The instrumental magnitude is defined as:
-
+        The instrumental magnitude is defined as
         $$
-        m = -2.5 \,\log_{10}(F) + ZP
+        m_{\rm inst} = -2.5 \,\log_{10}(s) + ZP .
         $$
-
-        where:
-          - $F$ is the net source flux (ADU or electrons),
-          - $ZP$ is the photometric zero point constant.
+        In this function we compute *instrumental* magnitudes, so we set
+        $ZP = 0$ by definition. Absolute zero points should be derived later
+        using standard stars.
 
         Error propagation follows:
-
         $$
-        \sigma_m^2 =
-        \left(\frac{\partial m}{\partial F}\right)^2 \sigma_F^2
-        =
-        \left(\frac{2.5}{\ln 10}\right)^2 \left(\frac{\sigma_F}{F}\right)^2
-        $$
+        \sigma_m^2
+        &= \left(\frac{\partial m}{\partial s}\right)^2 \sigma_s^2\\
 
-        Therefore:
-
-        $$
-        \sigma_m = \frac{2.5}{\ln 10} \cdot \frac{\sigma_F}{F}
+        &= \left(\frac{2.5}{\ln 10}\right)^2 \left(\frac{\sigma_{s}}{s}\right)^2,
         $$
 
         where:
-          - $F$ is the net source flux (same units as `error_counts`),
-          - $\sigma_F$ is the flux error,
-          - $\sigma_m$ is the magnitude error.
+          - $\sigma_s$ is the uncertainty on $s$ (in the same units as $s$);
+          - $\sigma_m$ is the magnitude uncertainty.
 
         Note
         ----
-        The ratio $\sigma_F / F$ is dimensionless, so the choice of flux
-        units (ADU vs electrons) cancels out. Consistency between
-        `src_counts` and `error_counts` is essential.
+        The ratio $\sigma_s / s$ is dimensionless, so the choice of units
+        for `src_counts` (ADU vs electrons) does not affect the final
+        magnitude error, as long as `src_counts`, `error_counts`, and
+        `error_counts_ul` are expressed in the **same** units.
+
+        This function also supports non-detections. If the measured
+        significance falls below ``detection_significance`` (e.g.
+        ``src_counts / error_counts < detection_significance`` or
+        ``src_counts <= 0``), a magnitude is not reported and a
+        background-only upper limit based on ``error_counts_ul`` should
+        be used instead.
 
         Parameters
         ----------
@@ -305,17 +320,25 @@ class Photometry():
             Uncertainty on the source counts (same units as `src_counts`).
         error_counts_ul:astropy.units.Quantity
             The background-only Uncertainty (same units as `src_counts`).
-        detection_significance: int or float
-            The significance to determine a detection or not.
-        z_const : float
-            Photometric zero point constant.
+            It must be strictly positive for all non-detections.
+        detection_significance : int or float
+            The significance threshold (in sigma) to determine a detection.
+            If `src_counts / error_counts < detection_significance`,
+            the source is considered non-detected, and `error_counts_ul`
+            will be used for upper limit calculation.
 
         Returns
         -------
-        mag : float or array-like
-            Instrumental magnitude.
-        error_mag : float or array-like
-            Magnitude uncertainty.
+        mag : Quantity
+            Instrumental magnitude. If the source is not significantly detected,
+            this may represent an upper limit magnitude calculated as
+            `-2.5 * log10(k * error_counts_ul)`, where k is `detection_significance`.
+        error_mag : Quantity
+            Magnitude uncertainty. For detected sources, this is propagated from
+            `error_counts`. For non-detections, this is typically set to NaN,
+            as the magnitude value itself represents an upper limit.
+        snr : numpy.ndarray
+            Signal-to-noise ratio ``src_counts / error_counts``.
         """
 
         # make sure all the input are array-like instead of scalars
@@ -324,40 +347,36 @@ class Photometry():
         error_counts_ul = np.atleast_1d(error_counts_ul)
 
         # make sure input are Quantity objects
-        if not all(isinstance(x, u.Quantity)
-                   for x in (src_counts, error_counts, error_counts_ul)):
-            raise TypeError(
-                "src_counts, error_counts, error_counts_ul must be astropy Quantities.")
+        if not all(isinstance(x, u.Quantity) for x in (src_counts, error_counts, error_counts_ul)):
+            raise TypeError("src_counts, error_counts, and error_counts_ul "
+                            "must be astropy Quantity objects.")
 
-        # make sure input units are the same
+        # We require *identical* units (not just equivalent values), because we are
+        # working with raw counts (ADU or electrons).
         if not (src_counts.unit == error_counts.unit == error_counts_ul.unit):
-            raise UnitsError(f"Units must match: src={src_counts.unit}, "
-                             f"err={error_counts.unit}, error_counts_ul={error_counts_ul.unit}")
+            raise UnitsError("src_counts, error_counts, and error_counts_ul "
+                             "must all have the same units."
+                             f"(got src={src_counts.unit}, err={error_counts.unit}, ul={error_counts_ul.unit})")
 
         # make sure the input shapes are the same
-        if not (src_counts.shape == error_counts.shape ==
-                error_counts_ul.shape):
+        # if there is a global error_counts_ul or error_counts, it can be broadcasted in the future
+        if not (src_counts.shape == error_counts.shape == error_counts_ul.shape):
             raise ValueError(f"Shapes must match: src={src_counts.shape}, "
                              f"err={error_counts.shape}, error_counts_ul={error_counts_ul.shape}")
 
-        # Detection significance
+        # # signal-to-noise ratio in counts-space
         snr = src_counts.value / error_counts.value
-        nd_mask = (snr < detection_significance) | (
-            src_counts.value <= 0)  # mask for the non-detection case
+        nd_mask = (snr < detection_significance) | (src_counts.value <= 0)  # mask for the non-detection case
 
         # ignore warnings when src_counts <= 0
         with np.errstate(divide='ignore', invalid='ignore'):
-            mag = -2.5 * np.log10(src_counts.value) + z_const
-            error_mag = (2.5 / np.log(10)) * \
-                (error_counts.value / src_counts.value)
+            mag = -2.5 * np.log10(src_counts.value)
+            error_mag = (2.5 / np.log(10)) * (error_counts.value / src_counts.value)
 
-        mag[nd_mask] = -2.5 * \
-            np.log10(detection_significance *
-                     error_counts_ul.value[nd_mask]) + z_const
+        mag[nd_mask] = -2.5 * np.log10(detection_significance * error_counts_ul.value[nd_mask])
         error_mag[nd_mask] = np.nan
 
-        return np.atleast_1d(
-            mag * u.mag), np.atleast_1d(error_mag * u.mag), np.atleast_1d(snr)
+        return np.atleast_1d(mag * u.mag), np.atleast_1d(error_mag * u.mag), np.atleast_1d(snr)
 
     @staticmethod
     def region2aperture(regions):
@@ -432,9 +451,12 @@ class Photometry():
                 image_filter_name = image_headers["FILTER"]
                 gain = image_headers["GAIN"] * u.electron / u.adu
                 readout_noise = image_headers["RDNOISE"] * u.electron
+                n_com = image_headers["NCOMBINE"]
 
                 print(
-                    f"Working on photometry of {source_name} in {image_filter_name} from {image_path.name}")
+                    f"Working on photometry of {source_name} in {image_filter_name} from {image_path.name}"
+                )
+
                 if image_filter_name not in telescope.filters:
                     raise ValueError(
                         "The image filter is not in the filters of the telescope defined in sources!")
@@ -444,8 +466,7 @@ class Photometry():
 
                 # get the aperture and annulus aperture
 
-                src_region_fname = image_path.parent / \
-                    f"{source_name}_{image_filter_name}_src.reg"
+                src_region_fname = image_path.parent / f"{source_name}_{image_filter_name}_src.reg"
                 if not src_region_fname.exists():
                     raise OSError(f"{src_region_fname} not found!")
                 else:
@@ -456,8 +477,7 @@ class Photometry():
                     # unit
                     n_ap = src_apertures_pix.area * u.pix
 
-                bkg_region_fname = image_path.parent / \
-                    f"{source_name}_{image_filter_name}_bkg.reg"
+                bkg_region_fname = image_path.parent / f"{source_name}_{image_filter_name}_bkg.reg"
                 if not bkg_region_fname.exists():
                     raise OSError(f"{bkg_region_fname} not found!")
                 else:
@@ -492,14 +512,14 @@ class Photometry():
                                                                                   n_ap=n_ap,
                                                                                   n_ann=n_ann_eff,
                                                                                   aperture_counts=phot_table['src+bkg'],
-                                                                                  mean_bkg=mean_bkg)
+                                                                                  mean_bkg=mean_bkg,
+                                                                                  n_com=n_com)
 
                 # calculate the instrumental magnitude
                 m_inst, m_inst_error, significance = Photometry.counts2mag(src_counts=phot_src,
                                                                            error_counts=error_adu,
                                                                            error_counts_ul=error_ul_adu,
-                                                                           detection_significance=src_detection_sigma,
-                                                                           z_const=0)
+                                                                           detection_significance=src_detection_sigma)
 
                 # organize the Qtable
                 # add the column for total background

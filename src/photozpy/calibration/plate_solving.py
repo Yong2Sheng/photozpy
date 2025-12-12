@@ -231,20 +231,10 @@ class PlateSolving():
             self._image_collection, **{"IMTYPE": image_type})
         all_image_list = image_collection.files_filtered(include_path=True)
 
-        # here I want to move the standard sources to the front of the list
-        # So once one standard image is finished adding wcs, I can start deciding the standard stars and the standard magnitudes RIGHT AWAY!
-        # I don't have to wait until the end of plate solving since it's quiet
-        # time consuming.
-        std_collection = CollectionManager.filter_collection(
-            self._image_collection, **{
-                "IMTYPE": "Master Light", "OBJECT": self._sources.standard_stars[0].source_name})
-        std_list = std_collection.files_filtered(include_path=True)
-        target_list = [i for i in all_image_list if i not in std_list]
-        image_list = std_list + target_list
-        total_number = len(image_list)
+        total_number = len(all_image_list)
 
         failure_list = []
-        for count, image in enumerate(image_list, start=1):
+        for count, image in enumerate(all_image_list, start=1):
             image_path = Path(image)
             try:
                 _ = PlateSolving.add_wcs_locally_for_file(image_path)

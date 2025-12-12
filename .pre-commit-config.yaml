@@ -32,21 +32,20 @@ repos:
     rev: v0.13.1
     hooks:
       - id: ruff
-        pass_filenames: false   # 不传文件名
-        args: ["--fix", "."]  # 扫整个仓库并自动修复安全问题
+        args: ["--select", "E9,F"]  # only check: E9=syntax/parse errors,
+                                      # F=pyflakes correctness (undefined/unused),
+                                      # S=security (bandit); avoid style rules
 
   # ---------- Format ----------                        # Category: code formatting
   - repo: https://github.com/pre-commit/mirrors-autopep8   # Pre-commit mirror for autopep8
     rev: v2.0.4                                         # Pin version for reproducibility
     hooks:
       - id: autopep8                                    # Enable the autopep8 hook
-        name: autopep8 (format entire repo)             # Custom name: clarify this formats the whole repo
-        pass_filenames: false                           # Ignore file arguments; run on the entire repo
-        args: ["-i", "-a", "-r", "."]                   # Options:
+        name: autopep8 (ignore line length)             # Custom name: clarify this formats the whole repo
+        args: ["-i", "-a", "--ignore", "E501"]          # Options:
                                                         # -i: modify files in place
                                                         # -a: apply more aggressive fixes
-                                                        # -r: recursive into subdirectories
-                                                        # . : start from current directory (whole repo)
+                                                        #  "--ignore", "E501" ignore line length issue
 
 
   # ---------- Typing (optional but helpful) ----------
