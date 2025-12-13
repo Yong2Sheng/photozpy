@@ -277,13 +277,11 @@ class Combine():
                     combined.meta["NCOMBINE"] = int(image_number)
                     if image_type == "Light":
                         rdnoise = combined.meta["RDNOISE"]
-                        combined.meta["RDNOISE"] = rdnoise / \
-                            np.sqrt(image_number)  # update the RDNOISE
+                        combined.meta["RDNOISE"] = rdnoise
                         gain = combined.meta["GAIN"]
                         # the gain should remain the same
-                        combined.meta["GAIN"] = gain * image_number
-                    combined.data = combined.data.astype(
-                        np.float32)  # float32 is enough precision
+                        combined.meta["GAIN"] = gain
+                    combined.data = combined.data.astype(np.float32)  # float32 is enough precision
                     combined.uncertainty = None  # no need to track uncertainty here
                     combined.mask = None
                     combined.write(
