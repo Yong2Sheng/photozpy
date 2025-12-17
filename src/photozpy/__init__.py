@@ -1,4 +1,4 @@
-from .swiftz import SwiftDownload, SwiftCombine, CCD_Regions
+from .swiftz import SwiftDownload, SwiftCombine, CCD_Regions, PhotozRegions
 from .telescope import Telescope
 from .collection_manager import CollectionManager
 from .calibration import HeaderCorrection, HeaderManipulation, Combine, Reduction, Registration, PlateSolving, Artifacts
@@ -28,4 +28,5 @@ __all__ = [
     "MagnitudeInfo",
     "BaseSourceInfo",
     "Sources",
+    "PhotozRegions",
 ]
