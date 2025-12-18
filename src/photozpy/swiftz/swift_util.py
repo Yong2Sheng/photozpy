@@ -218,7 +218,7 @@ class SwiftDownload():
         return new_dict
 
     def download_swift_data(self, radius=5 / 60,
-                            uvotmode="0x30ed", organize=False):
+                            uvotmode="all", organize=False, **kwargs):
         """
         Download the Swift data. Note it will overwrite the source data in the same location you downloaded before.
         I should make it more flexible ...
@@ -231,6 +231,15 @@ class SwiftDownload():
             The uvot mode of the data you need.
         organize : bool, optional
             Organize the downloaded data for further analyais with this pipeline. (the default is `False`, which means do not organize)
+        kwargs : parameters passed to decide the download source
+
+        Notes
+        -----
+        - if no inputs: download from US database, from HEASARC (default)
+        - if `aws = True`: download from US database, from AWS
+                * only if `uksdc` and `itsdc` are `False`
+        - if `uksd  = True`: download from the UK Swift SDC
+        - if `itsdc = True`: download from the Italian Swift SDC
         """
 
         # check how many sources are in the obsquery_info dict
@@ -261,13 +270,30 @@ class SwiftDownload():
                     print(
                         f"{oq[i].obsid} has been downloaded/examined, skipping ...")
                 else:
-                    if oq[i].uvot_mode == uvotmode:
+                    if uvotmode == "all":
                         date_ = oq[i].begin.strftime("%Y-%m-%d %H:%M:%S")
                         print(
-                            f"{oq[i].obsid} on {date_} is being downloaded, the uvot mode is {oq[i].uvot_mode}")
-                        oq[i].download(
-                            uvot=True, outdir=target_dir, match=[
-                                "*/uvot/image/*sk.img.gz", "*/auxil/*"])
+                            f"{oq[i].obsid} on {date_} is being downloaded, the uvot mode is {oq[i].uvot_mode}."
+                        )
+                        oq[i].download(uvot=True,
+                                       outdir=target_dir,
+                                       match=["*/uvot/image/*sk.img.gz", "*/auxil/*"],
+                                       **kwargs,
+                                       )
+
+                        id_ = oq[i].obsid
+
+                    elif oq[i].uvot_mode == uvotmode:
+                        date_ = oq[i].begin.strftime("%Y-%m-%d %H:%M:%S")
+                        print(
+                            f"{oq[i].obsid} on {date_} is being downloaded, the uvot mode is {oq[i].uvot_mode}."
+                        )
+                        oq[i].download(uvot=True,
+                                       outdir=target_dir,
+                                       match=["*/uvot/image/*sk.img.gz", "*/auxil/*"],
+                                       **kwargs,
+                                       )
+
                         id_ = oq[i].obsid
                     else:
                         print(
@@ -288,7 +314,7 @@ class SwiftDownload():
         for source_name in source_names:
             # linux doesn't work with spaces in path
             src_dir = self.download_dir / source_name.replace(" ", "_")
-            files = list(src_dir.rglob('*sk*.img.gz'))
+            files = list(src_dir.rglob('*u??_sk.img.gz'))
             for file in files:
                 fits_path = ungz_file(
                     file_path=file,
