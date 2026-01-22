@@ -1,35 +1,82 @@
 # photozpy
-The photo-z analysis pipeline with python
+
+A Python pipeline for photometry and photo-z–related analysis (Swift/UVOT + SARA images).
+
+## Recommended workflow
+
+- Use **conda** to manage *all dependencies*
+- Use **pip only** for installing `photozpy` in **editable** mode:
+  - `python -m pip install -e . --no-deps`
 
 ## Installation
 
-1. It's recommended to use photozpy in a conda environment. Follow the instructions on the [Anaconda website](https://docs.anaconda.com/free/anaconda/install/index.html) for installation.
+### 1) Install conda
 
-2. Create conda environment
-	Open your terminal
-	```bash
-	conda create --name photozpy pip python=3.9.19
-	```
+Install Anaconda (or Miniconda) following the official guide:
+https://docs.anaconda.com/free/anaconda/install/index.html
 
-3. Activate conda environment
-	In the terminal, run the following command to activate the photozpy environment
-	```bash
-	conda activate photozpy
-	```
+(Optional) Use conda-forge with strict channel priority to reduce dependency conflicts:
 
-4. Clone the photozpy GitHub to your local machine
-	In the terminal, run the following command to download the photozpy
-	```bash
-	git clone https://github.com/Yong2Sheng/photozpy.git
-	```
-	Note that you might need to setup your ssh keys if it's your first time to clone a remote repository to your local machine.
+```bash
+conda config --add channels conda-forge
+conda config --set channel_priority strict
+```
 
-5. Enter the *photozy* folder and install `photozpy` module into the photozpy environment
-	```shell
-	>>> cd photozpy
-	>>> pip install -e .
-	```
+### 2) Clone the repository
 
-6. Once the installation is done, you can import and use `photozpy` module. Please go to the *docs* folder to try out the tutorial.
+```bash
+git clone https://github.com/Yong2Sheng/photozpy.git
+cd photozpy
+```
 
-7. To run unit test: pytest --cov=photozpy --cov-report term --cov-report html:tests/coverage_report
+### 3) Create and activate the conda environment
+
+Create the environment from `environment.yml`:
+
+```bash
+conda env create -f environment.yml
+```
+
+Activate the environment (the env name is defined by `name:` in `environment.yml`):
+
+```bash
+conda activate <ENV_NAME>
+```
+
+If you edit `environment.yml` later, update the environment with:
+
+```bash
+conda env update -f environment.yml --prune
+```
+
+### 4) Install `photozpy` in editable mode
+
+From the repository root (same folder as `pyproject.toml`):
+
+```bash
+python -m pip install -e . --no-deps
+```
+
+## Quick start
+
+Tutorial notebooks are under `docs/`, for example:
+
+- `docs/Tutorial.ipynb`
+
+## Testing
+
+Smoke test (used by the pre-push hook):
+
+```bash
+pytest -m smoke
+```
+
+Full test + coverage (HTML report will be written to `tests/coverage_report/`):
+
+```bash
+pytest --cov=photozpy --cov-report=term --cov-report=html:tests/coverage_report
+```
+
+## License
+
+(TODO) Add license information here.

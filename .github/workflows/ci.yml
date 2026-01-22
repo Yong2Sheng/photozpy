@@ -3,38 +3,44 @@ name: CI
 
 on:
   push:
-    branches: [develop]   # 你在用 develop；如需只跑 develop 就只写 develop
-  pull_request:                    # 有 PR 时也会跑（你目前不用 PR 也没关系）
-  workflow_dispatch:               # 允许在 Actions 页面手动触发
+    branches: [develop]
+  pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
 
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.9.19']   # 与本地一致；也可以扩成多版本矩阵
-
     steps:
       - name: Check out code
         uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      # Create a conda/mamba environment from environment.yml
+      - name: Set up micromamba environment
+        uses: mamba-org/setup-micromamba@v2
         with:
-          python-version: ${{ matrix.python-version }}
-          #cache: 'pip'  # ← 先去掉，等你有 requirements.txt 再开
+          environment-file: environment.yml
+          # keep env name stable regardless of environment.yml's name:
+          environment-name: ci
+          # optional but recommended: cache env for faster CI
+          cache-environment: true
+          # make channels explicit (avoid surprises)
+          condarc: |
+            channels:
+              - conda-forge
+              - defaults
 
-      - name: Install package and dev tools
+      # Install your package in editable mode; keep deps managed by conda/mamba
+      - name: Install photozpy (editable, no deps)
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"     # 你的 setup.py extras_require['dev'] 会装 pytest/ruff 等
+          python -m pip install -e . --no-deps
+        shell: micromamba-shell {0}
 
-      # —— 可选：在 CI 上也跑一次静态检查（和本地 pre-commit 对齐）——
       - name: Lint (ruff)
         run: |
           ruff check .
+        shell: micromamba-shell {0}
 
       - name: Run tests with coverage (HTML + XML)
         run: |
@@ -42,6 +48,7 @@ jobs:
                  --cov-report=term-missing \
                  --cov-report=xml:coverage.xml \
                  --cov-report=html:tests/coverage_report
+        shell: micromamba-shell {0}
 
       # 把 HTML 覆盖率报告作为工件上传，方便从网页下载浏览
       - name: Upload HTML coverage report
