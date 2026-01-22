@@ -1,0 +1,26 @@
+# pyproject.toml
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "photozpy"
+version = "0.1.0"
+description = "Automatic pipeline for data analysis UVOT and SARA images."
+authors = [{ name = "Yong Sheng", email = "sheng2@clemson.edu" }]
+requires-python = ">=3.9,<3.10"
+
+# 这里的 dependencies 只影响「pip 安装」场景；
+# 你走 conda 管依赖 + pip --no-deps 时，可以先不写或写得很宽松
+# dependencies = []
+
+[tool.setuptools]
+# Use a "src/" layout: tell setuptools that the root package directory is ./src.
+# In other words, importing "photozpy" corresponds to files under src/photozpy/.
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+# Discover (find) packages by scanning the ./src directory.
+where = ["src"]
+# Only include the "photozpy" package and any of its subpackages (e.g., photozpy.*, photozpy.swiftz, ...).
+include = ["photozpy*"]
