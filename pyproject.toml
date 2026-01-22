@@ -8,7 +8,7 @@ name = "photozpy"
 version = "0.1.0"
 description = "Automatic pipeline for data analysis UVOT and SARA images."
 authors = [{ name = "Yong Sheng", email = "sheng2@clemson.edu" }]
-requires-python = ">=3.9,<3.10"
+requires-python = ">=3.11,<3.12"
 
 # 这里的 dependencies 只影响「pip 安装」场景；
 # 你走 conda 管依赖 + pip --no-deps 时，可以先不写或写得很宽松

@@ -1,20 +1,23 @@
-*checkpoints
-*egg_info/*
-.gitingore
-photozpy.egg-info/
-*__pycache__
-*.DS_Store*
-src/photozpy/calibration/testing_files/
-
 # Byte-compiled / cache files
 __pycache__/
 *.py[cod]
+
+# Packaging
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+*-checkpoint.ipynb
+
+# macOS
+.DS_Store
 
 # Unit test / coverage reports
 htmlcov/
 .coverage*
 coverage.xml
 tests/coverage_report/
-
-# Pytest cache
 .pytest_cache/
+
+# Project-specific
+src/photozpy/calibration/testing_files/

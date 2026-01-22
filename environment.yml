@@ -3,7 +3,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.9
+  - python=3.11
   - pip
 
   # --- core scientific stack (allow patch/minor updates, avoid major breaks) ---
@@ -22,6 +22,7 @@ dependencies:
 
   # --- your pipeline deps ---
   - swifttools>=3.0,<4
+  - boto3 # dependency for swifttools. It needs manual installation
   - tqdm
   - chardet
 
