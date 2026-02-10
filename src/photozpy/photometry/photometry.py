@@ -141,14 +141,33 @@ class Photometry():
         median_bkg = bkg_stats.median
         sigma_ann = bkg_stats.std
 
-        if np.any(np.abs(mean_bkg - median_bkg) > tolerance * sigma_ann):
-            warnings.warn(
-                f"Background mean ({mean_bkg:.3f}) and median ({median_bkg:.3f}) differ "
-                f"by {abs(mean_bkg - median_bkg):.3f}, exceeding tolerance "
-                f"{tolerance:.2f} × sigma_ann ({sigma_ann:.3f}). "
-                "Possible residual contamination in annulus!",
-                UserWarning
+        diff = np.abs(mean_bkg - median_bkg)
+        bad = diff > tolerance * sigma_ann
+
+        if np.any(bad):
+            # get idx of the bkg annlus when differnece larger than tolerance
+            bad_idx = np.where(bad)[0] if bad.ndim > 0 else np.array([0], dtype=int)
+
+            lines = []
+            lines.append(
+                f"Background mean and median differ beyond tolerance for {bad_idx.size} annuli/annulus. "
+                f"indices={bad_idx.tolist()}"
             )
+
+            # write the warning text
+            for i in bad_idx:
+                i = int(i)
+                lines.append(
+                    "  "
+                    f"annulus index={i}  "
+                    f"mean={float(mean_bkg[i]):.4f}  "
+                    f"median={float(median_bkg[i]):.4f}  "
+                    f"diff={float(diff[i]):.4f}  "
+                    f"sigma={float(sigma_ann[i]):.4f}  "
+                    f"tol*sigma={float(tolerance * sigma_ann[i]):.4f}"
+                )
+    
+            logger.warning("\n".join(lines))
 
         return mean_bkg * (u.adu / u.pix), bkg_stats
 
