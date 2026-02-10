@@ -65,7 +65,7 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
-      istages: [pre-commit]            # 覆盖默认stage，确保只在commit时运行
+      #stages: [pre-commit]            # 覆盖默认stage，确保只在commit时运行
       - id: end-of-file-fixer           # 确保文件末尾只有 1 个换行
         #stages: [pre-commit]            # 覆盖默认stage，确保只在commit时运行
       - id: check-merge-conflict        # prevent committing conflict markers

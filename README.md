@@ -55,7 +55,7 @@ From the repository root (same folder as `pyproject.toml`):
 
 ```bash
 python -m pip install -e . --no-deps
-pre-commit install --hook-type pre-push -f
+pre-commit install -f
 
 ```
 
