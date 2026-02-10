@@ -3,7 +3,7 @@ default_stages: [pre-commit]  # 影响的是没有内置 stages、且你自己�
                               # 对于有内置stages，这个默认stage不会起效，需要在下面的hook
                               # 中显式定义，比如trailing-whitespace
 default_language_version:
-  python: python3.9
+  python: python3.11
 
 exclude: |
   (?x)^(
