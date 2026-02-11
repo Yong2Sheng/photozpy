@@ -144,7 +144,7 @@ class Photometry():
         bad = diff > tolerance * sigma_ann
 
         if np.any(bad):
-            # get idx of the bkg annlus when differnece larger than tolerance
+            # get idx of the bkg annlus when difference larger than tolerance
             bad_idx = np.where(bad)[0] if bad.ndim > 0 else np.array([0], dtype=int)
 
             lines = []
@@ -165,7 +165,7 @@ class Photometry():
                     f"sigma={float(sigma_ann[i]):.4f}  "
                     f"tol*sigma={float(tolerance * sigma_ann[i]):.4f}"
                 )
-    
+
             logger.warning("\n".join(lines))
 
         return mean_bkg * (u.adu / u.pix), bkg_stats
