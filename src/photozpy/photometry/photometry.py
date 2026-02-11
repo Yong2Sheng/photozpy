@@ -24,7 +24,6 @@ import astropy.units as u
 from regions import CircleSkyRegion, Regions, CircleAnnulusSkyRegion
 from astropy.table import QTable
 import logging
-import warnings
 logger = logging.getLogger(__name__)
 
 
