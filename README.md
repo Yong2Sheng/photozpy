@@ -49,12 +49,14 @@ If you edit `environment.yml` later, update the environment with:
 conda env update -f environment.yml --prune
 ```
 
-### 4) Install `photozpy` in editable mode
+### 4) Install `photozpy` in editable mode and install pre-push hooks
 
 From the repository root (same folder as `pyproject.toml`):
 
 ```bash
 python -m pip install -e . --no-deps
+pre-commit install -f
+
 ```
 
 ## Quick start
