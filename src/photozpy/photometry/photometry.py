@@ -141,9 +141,9 @@ class Photometry():
         sigma_ann = bkg_stats.std
 
         # Ensure indexable arrays for both scalar and multi-aperture cases
-        mean_bkg   = np.atleast_1d(mean_bkg)
+        mean_bkg = np.atleast_1d(mean_bkg)
         median_bkg = np.atleast_1d(median_bkg)
-        sigma_ann  = np.atleast_1d(sigma_ann)
+        sigma_ann = np.atleast_1d(sigma_ann)
 
         diff = np.abs(mean_bkg - median_bkg)
         bad = diff > tolerance * sigma_ann
