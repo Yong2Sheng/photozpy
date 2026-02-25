@@ -239,7 +239,7 @@ class Sources():
 
         for target in self.targets:
             print(target.source_name)
-            print(target.skycoord.to_string("hmsdms", sep = ":", precision = 2, )[0])
+            print(target.skycoord.to_string("hmsdms", sep=":", precision=2, )[0])
             # print magnitudes
             print(f"The magnitudes in {telescope.filters} are:")
             for filter_names in telescope.filters:
