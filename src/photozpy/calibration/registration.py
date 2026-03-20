@@ -82,26 +82,26 @@ class Registration():
 
         # start image registration, the files will be over written
         for i in register_image_paths:
-            
+
             target_file_name = Path(i).name
             target_ext0 = fits.getdata(i, ext=0)
             header_target = fits.getheader(i)
-            
+
             if header_target.get("ALIGN", None) == "Registered":
                 print(f"{target_file_name} already aligned, skipping.....")
-                
+
             else:
                 print(f"Aligning {target_file_name} using {refernece_image_name}")
                 target_data = target_ext0.byteswap().newbyteorder()
                 # target_data, mask = lacosmic(target_data)
-    
+
                 # reference_ext0 = fits.getdata(reference_image_path, ext=0)
                 # reference_data = reference_ext0.byteswap().newbyteorder()
                 # reference_data, mask = lacosmic(reference_data)
-    
+
                 img_aligned, footprint = register(
                     target_data, reference_data, min_area=min_area, detection_sigma=detection_sigma)
-    
+
                 header_target["ALIGN"] = "Registered"
                 hdu = fits.PrimaryHDU(img_aligned, header_target)
                 hdu.writeto(i, overwrite=True)

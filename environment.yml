@@ -19,6 +19,11 @@ dependencies:
   - astroquery>=0.4.7,<0.5
   - regions>=0.8,<1
   - astroalign>=2.5,<3
+  - astropy-healpix
+  - pytables
+
+  # --- standard star metadata visualization ---
+  - tabulate
 
   # --- your pipeline deps ---
   - swifttools>=3.0,<4

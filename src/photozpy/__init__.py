@@ -5,6 +5,7 @@ from .calibration import HeaderCorrection, HeaderManipulation, Combine, Reductio
 from .photometry import SourceDetection, Photometry, SwiftPhotometry
 from .mimage_collection import mImageFileCollection
 from .sources import MagnitudeInfo, BaseSourceInfo, Sources
+from .standard_stars import StandardStarCatalog
 
 __version__ = "0.1.0"  # simple, importable version for tooling/tests
 
@@ -29,4 +30,5 @@ __all__ = [
     "BaseSourceInfo",
     "Sources",
     "PhotozRegions",
+    "StandardStarCatalog",
 ]
