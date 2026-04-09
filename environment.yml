@@ -44,3 +44,6 @@ dependencies:
   - black>=24,<25
   - mypy>=1.8,<2
   - pre-commit>=3.6,<4
+
+  # ds9 and xpa
+  - xpa
