@@ -470,7 +470,7 @@ class Photometry():
             mag_dict = None
             mag_err_dict = None
             significance_dict = None
-            
+
             for image_path in image_list:
                 image_path = Path(image_path)
                 ccddata = CCDData.read(image_path, hdu=hdu)

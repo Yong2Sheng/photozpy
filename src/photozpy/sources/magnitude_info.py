@@ -214,26 +214,26 @@ class MagnitudeInfo():
     @staticmethod
     def remove_outlier(array, sigma=3, verbose=False):
         array = np.asarray(array, dtype=float)
-    
+
         # 去掉 NaN / inf
         array = array[np.isfinite(array)]
-    
+
         # 0 个或 1 个点时，不做 zscore clipping，直接返回
         if array.size <= 1:
             return array
-    
+
         # 全相同时，std=0，也不要做 zscore
         if np.allclose(array, array[0]):
             return array
-    
+
         zscores = stats.zscore(array, nan_policy="omit")
         keep = np.abs(zscores) <= sigma
-    
+
         if verbose:
             for element, zscore, k in zip(array, zscores, keep):
                 if not k:
                     logger.info(f"{element} is an outlier with zscore of {zscore}!")
-    
+
         return array[keep]
 
     def calculate_zero_points(self, sigma=3, update=True):
@@ -242,67 +242,67 @@ class MagnitudeInfo():
         print("cab_mags:", self._cab_mags.colnames)
         print("inst_mags:", self._inst_mags.colnames)
         print("significance:", self._significance.colnames)
-    
+
         if self._mag_type == "target":
             raise TypeError(
                 "You should NOT use target magnitudes to find zero points! Please use standard stars instead."
             )
-    
+
         calculated_zero_points = copy.deepcopy(self._zero_points)
-    
+
         for filter_name in calculated_zero_points.colnames:
-    
+
             # 缺列就跳过
             if filter_name not in self._cab_mags.colnames:
                 logger.warning(f"{filter_name} not found in calibrated magnitudes; setting zero point to -99.")
                 calculated_zero_points[filter_name] = [-99] * u.mag
                 self._diff_dict[filter_name] = np.array([])
                 continue
-    
+
             if filter_name not in self._inst_mags.colnames:
                 logger.warning(f"{filter_name} not found in instrumental magnitudes; setting zero point to -99.")
                 calculated_zero_points[filter_name] = [-99] * u.mag
                 self._diff_dict[filter_name] = np.array([])
                 continue
-    
+
             if filter_name not in self._significance.colnames:
                 logger.warning(f"{filter_name} not found in detection significance; setting zero point to -99.")
                 calculated_zero_points[filter_name] = [-99] * u.mag
                 self._diff_dict[filter_name] = np.array([])
                 continue
-    
+
             zero = MagnitudeInfo.mag_operator(
                 mag_list1=self._cab_mags[filter_name],
                 mag_list2=self._inst_mags[filter_name],
                 operation="-"
             )
-    
+
             self._diff_dict[filter_name] = zero.value
-    
+
             useful_index = self._significance[filter_name] >= 3.0
             zero = zero[useful_index]
-    
+
             zero_vals = np.asarray(zero.value, dtype=float)
             zero_vals = zero_vals[np.isfinite(zero_vals)]
             zero_vals = zero_vals[zero_vals != -99]
-    
+
             if zero_vals.size == 0:
                 logger.warning(f"No valid zero-point measurements in {filter_name}.")
                 calculated_zero_points[filter_name] = [-99] * u.mag
                 continue
-    
+
             zero_vals = MagnitudeInfo.remove_outlier(zero_vals, sigma=sigma)
-    
+
             if zero_vals.size == 0:
                 logger.warning(f"All zero-point measurements rejected in {filter_name}.")
                 calculated_zero_points[filter_name] = [-99] * u.mag
                 continue
-    
+
             calculated_zero_points[filter_name] = [np.mean(zero_vals) * u.mag]
-    
+
         if update:
             self._zero_points = calculated_zero_points
-    
+
         return calculated_zero_points
 
     # def calculate_zero_points(self, sigma=3, update=True):

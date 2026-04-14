@@ -235,7 +235,7 @@ class Telescope():
                        "SDSS_r": "SDSS_r'",
                        "SDSS_i": "SDSS_i'",
                        "SDSS_z": "SDSS_z'",
-                       "Bessel I": "Bessel_I",}  # ,
+                       "Bessel I": "Bessel_I", }  # ,
             # "B": "ubb",
             # "UVM2": "um2",
             # "U": "uuu",

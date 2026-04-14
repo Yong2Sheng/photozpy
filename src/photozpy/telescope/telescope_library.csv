@@ -4,4 +4,3 @@ RM,Andor,1.0,6.3,griz,SDSS_g'/SDSS_r'/SDSS_i'/SDSS_z'
 Swift,UVOT,1,0,0X30ED,B/UVM2/U/V/UVW1/UVW2
 KP,ARC,2.3,6.0,Bessel,Bessel_B/Bessel_V/Bessel_R/Bessel_I
 VIRT,FLI,1.29,12.9,Bessel,Bessel_B/Bessel_V/Bessel_R/Bessel_I
-
