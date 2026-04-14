@@ -460,13 +460,17 @@ class Photometry():
             # initialize mag and error dict
             # we use [np.nan] avoid case when a source only has some of the filters
             # len(np.nan) returns an error, so I put it into a list
-            mag_dict = {filter_name: [np.nan]
-                        for filter_name in telescope.filters}
-            mag_err_dict = {filter_name: [np.nan]
-                            for filter_name in telescope.filters}
-            significance_dict = {filter_name: [np.nan]
-                                 for filter_name in telescope.filters}
-
+            # mag_dict = {filter_name: [np.nan]
+            #             for filter_name in telescope.filters}
+            # mag_err_dict = {filter_name: [np.nan]
+            #                 for filter_name in telescope.filters}
+            # significance_dict = {filter_name: [np.nan]
+            #                      for filter_name in telescope.filters}
+            expected_n_rows = None
+            mag_dict = None
+            mag_err_dict = None
+            significance_dict = None
+            
             for image_path in image_list:
                 image_path = Path(image_path)
                 ccddata = CCDData.read(image_path, hdu=hdu)
@@ -569,6 +573,28 @@ class Photometry():
                 phot_table["mag_inst"].info.format = "%4f"
 
                 phot_table["mag_inst_error"].info.format = "%4f"
+
+                n_rows = len(phot_table)
+
+                if expected_n_rows is None:
+                    expected_n_rows = n_rows
+                    mag_dict = {
+                        filter_name: np.full(expected_n_rows, np.nan) * u.mag
+                        for filter_name in telescope.filters
+                    }
+                    mag_err_dict = {
+                        filter_name: np.full(expected_n_rows, np.nan) * u.mag
+                        for filter_name in telescope.filters
+                    }
+                    significance_dict = {
+                        filter_name: np.full(expected_n_rows, np.nan)
+                        for filter_name in telescope.filters
+                    }
+                elif n_rows != expected_n_rows:
+                    raise ValueError(
+                        f"Inconsistent number of apertures for source {source_name}: "
+                        f"expected {expected_n_rows}, got {n_rows} in filter {image_filter_name}"
+                    )
 
                 mag_dict[image_filter_name] = phot_table["mag_inst"]
                 mag_err_dict[image_filter_name] = phot_table["mag_inst_error"]
