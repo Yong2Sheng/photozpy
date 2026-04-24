@@ -13,19 +13,20 @@ from tabulate import tabulate
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass(frozen=True, slots=True)
 class CCD:
     """
     Data object for a CCD definition.
 
     This class describes CCD-specific parameters.
-    It should not decide whether the current pipeline 
+    It should not decide whether the current pipeline
     should use it or not.
     """
 
     name: str
     gain: Quantity
-    rdnoise: Quantity # expected unit: electron / pix
+    rdnoise: Quantity  # expected unit: electron / pix
 
     valid_from: date | None = None
     valid_to: date | None = None
@@ -90,12 +91,12 @@ class CCD:
             return False
 
         return True
-        
+
     def validate(self) -> None:
         """
         Validate if the inputs are appropriate.
         """
-        
+
         if not self.name:
             raise ValueError("name must not be empty.")
 
@@ -117,12 +118,12 @@ class CCD:
         if self.rdnoise.value < 0:
             raise ValueError("rdnoise must be non-negative.")
 
-        if self.valid_from is not None and type(self.valid_from) is not date:
+        if self.valid_from is not None and not isinstance(self.valid_from, date):
             raise TypeError("valid_from must be a date or None.")
-            
-        if self.valid_to is not None and type(self.valid_to) is not date:
+
+        if self.valid_to is not None and not isinstance(self.valid_to, date):
             raise TypeError("valid_to must be a date or None.")
-    
+
         if self.valid_from is not None and self.valid_to is not None:
             if self.valid_from > self.valid_to:
                 raise ValueError(
