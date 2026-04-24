@@ -59,6 +59,12 @@ pre-commit install -f
 
 ```
 
+Manually run the same checks that would run on push:
+
+```bash
+pre-commit run --all-files --hook-stage pre-push
+```
+
 ## Quick start
 
 Tutorial notebooks are under `docs/`, for example:
