@@ -1,5 +1,5 @@
 from .swiftz import SwiftDownload, SwiftCombine, CCD_Regions, PhotozRegions
-from .telescope import Telescope, CCD
+from .telescope import Telescope, CCD, FilterSet
 from .collection_manager import CollectionManager
 from .calibration import HeaderCorrection, HeaderManipulation, Combine, Reduction, Registration, PlateSolving, Artifacts
 from .photometry import SourceDetection, Photometry, SwiftPhotometry
@@ -32,4 +32,5 @@ __all__ = [
     "PhotozRegions",
     "CCD",
     "StandardStarCatalog",
+    "FilterSet",
 ]
