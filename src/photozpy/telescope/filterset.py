@@ -12,8 +12,10 @@ AliasTuple: TypeAlias = tuple[str, ...]
 
 EMPTY_VALUES = (None, "", (), [])
 
+
 class UnknownFilterAliasError(ValueError):
     """Raised when a filter alias cannot be resolved."""
+
 
 class FilterSet:
     """
@@ -46,7 +48,7 @@ class FilterSet:
                 # No extra aliases. The standard name itself is still added to
                 # alias_to_standard below, so resolve("SDSS_g") will work.
                 alias_tuple: AliasTuple = ()
-                
+
             # second deal with string inputs
             elif isinstance(alias, str):
                 if standard_name == alias:
@@ -55,9 +57,9 @@ class FilterSet:
                         "Do not include the standard name in aliases; it is added automatically."
                     )
                 else:
-                    alias_tuple: AliasTuple  = (alias,)
-                    
-            # third deal with tuple and list inputs  
+                    alias_tuple: AliasTuple = (alias,)
+
+            # third deal with tuple and list inputs
             elif isinstance(alias, (tuple, list)):
                 if standard_name in alias:
                     raise ValueError(
@@ -66,7 +68,7 @@ class FilterSet:
                     )
                 else:
                     alias_tuple: AliasTuple = tuple(alias)
-                    
+
             # raise an error if the input type is not expected
             else:
                 raise ValueError(f"Unsupported alias input type: {type(alias)}!")
@@ -75,7 +77,7 @@ class FilterSet:
             # The standard name itself is intentionally not inserted here,
             # so this table stays close to the filter-set module definition.
             processed_standard_to_alias[standard_name] = alias_tuple
-            
+
             # Build the reverse lookup table:
             #
             #     alias -> standard filter name
@@ -115,10 +117,10 @@ class FilterSet:
                         f"but now maps to {standard_name!r}."
                     )
                 alias_to_standard[alias] = standard_name
-        
+
         self._standard_to_alias = MappingProxyType(processed_standard_to_alias)
         self._alias_to_standard = MappingProxyType(alias_to_standard)
-        
+
         return
 
     @property
