@@ -69,6 +69,12 @@ class CCD:
                 self.name,
             )
 
+        if self.valid_from is None:
+            object.__setattr__(self, "valid_from", date.min)
+
+        if self.valid_to is None:
+            object.__setattr__(self, "valid_to", date.max)
+
     @property
     def shape(self) -> tuple[int, int] | None:
         if self.nx is None or self.ny is None:
@@ -184,3 +190,30 @@ class CCD:
 
     def print_summary(self) -> None:
         print(self.to_table())
+
+    def conflicts_with(
+        self,
+        other: CCD,
+    ) -> bool:
+        """
+
+        Return whether two CCD definitions overlap in validity range.
+
+        This check is only meaningful when comparing CCDs that share the same name.
+
+        ``None`` is treated as an open boundary.
+
+        The validity interval is treated as closed on both ends:
+
+            valid_from <= obs_date <= valid_to
+
+        Therefore, touching boundaries are considered overlapping.
+
+        """
+
+        self_start = self.valid_from or date.min
+        self_end = self.valid_to or date.max
+        other_start = other.valid_from or date.min
+        other_end = other.valid_to or date.max
+
+        return not (self_end < other_start or other_end < self_start)

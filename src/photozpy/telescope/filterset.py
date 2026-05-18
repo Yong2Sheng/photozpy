@@ -177,3 +177,59 @@ class FilterSet:
 
     def print_summary(self) -> None:
         print(self.to_table())
+
+    def find_conflicts(
+        self,
+        other: FilterSet
+    ) -> tuple[str, ...]:
+        """
+        Return all overlapping resolvable names between two filter sets.
+
+        A conflict is defined as any name that appears in both filter sets'
+        resolvable namespaces. In this class design, the resolvable namespace
+        includes:
+
+            - each standard filter name itself
+            - all declared aliases
+
+        Therefore this method catches all of the following cases:
+
+            - standard name vs standard name
+            - alias vs alias
+            - alias vs standard name
+
+        Parameters
+        ----------
+        other : FilterSet
+            Another filter set to compare against.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Sorted overlapping names. Empty tuple means no conflict.
+        """
+
+        # use sort for easier readability
+        # use tuple for better output since tuple elements are not changeable
+        return tuple(sorted(set(self.alias) & set(other.alias)))
+
+    def conflicts_with(
+        self,
+        other: FilterSet,
+    ) -> bool:
+        """
+        Return whether this filter set conflicts with another filter set.
+
+        Two filter sets conflict if their resolvable namespaces overlap.
+
+        Parameters
+        ----------
+        other : FilterSet
+            Another filter set to compare against.
+
+        Returns
+        -------
+        bool
+            True if any overlapping resolvable names exist, otherwise False.
+        """
+        return not set(self.alias).isdisjoint(other.alias)
