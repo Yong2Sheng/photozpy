@@ -63,7 +63,7 @@ class ImageCollectionGroup:
         Create a group from existing `ImageFileCollection` objects with
         potentially different configurations.
     """
-    
+
     def __init__(
         self,
         directories: str | Path | Iterable[str | Path],
@@ -123,12 +123,12 @@ class ImageCollectionGroup:
                 "'directories' must be a str, pathlib.Path, "
                 "or an iterable of str/pathlib.Path objects."
             )
-        
+
         self._directories = tuple(
             Path(directory).expanduser().resolve()
             for directory in directories
         )
-        
+
         # Reject an empty directory iterable.
         if not self._directories:
             raise ValueError(
@@ -146,7 +146,7 @@ class ImageCollectionGroup:
 
     @classmethod
     def from_collections(
-        cls, 
+        cls,
         collections: ImageFileCollection | Iterable[ImageFileCollection],
     ) -> "ImageCollectionGroup":
         """
@@ -200,7 +200,7 @@ class ImageCollectionGroup:
         does not attempt to infer or reproduce their original construction
         keyword arguments.
         """
-        
+
         # initialize collections tuple
         if isinstance(collections, ImageFileCollection):
             collections = (collections,)
@@ -226,7 +226,7 @@ class ImageCollectionGroup:
             raise TypeError(
                 "All items in 'collections' must be ImageFileCollection objects."
             )
-        
+
         # Then check whether each valid collection has one location.
         for collection in collections:
             if collection.location is None:
@@ -286,13 +286,13 @@ class ImageCollectionGroup:
         ----------
         index : int or slice
             Integer index or slice applied to the child collection tuple.
-        
+
         Returns
         -------
         ccdproc.ImageFileCollection or ImageCollectionGroup
             A single child collection for an integer index, or a new
             `ImageCollectionGroup` for a non-empty slice.
-        
+
         Raises
         ------
         ValueError
@@ -300,10 +300,10 @@ class ImageCollectionGroup:
             `ImageCollectionGroup` instances.
         """
         result = self._collections[index]
-    
+
         if isinstance(index, slice):
             return type(self).from_collections(result)
-    
+
         return result
 
     def items(self):
