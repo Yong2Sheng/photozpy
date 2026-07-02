@@ -1,7 +1,6 @@
 name: photozpy_dev
 channels:
   - conda-forge
-  - defaults
 dependencies:
   - python=3.11
   - pip
@@ -19,7 +18,7 @@ dependencies:
   - astroquery>=0.4.7,<0.5
   - regions>=0.8,<1
   - astroalign>=2.5,<3
-  - astropy-healpix
+  - astropy-healpix>=1.0.3,<2
   - pytables
 
   # --- standard star metadata visualization ---
