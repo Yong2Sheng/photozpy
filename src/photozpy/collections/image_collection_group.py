@@ -164,7 +164,7 @@ class ImageCollectionGroup:
             One existing `ImageFileCollection` or an iterable of existing
             `ImageFileCollection` objects.
 
-            Every collection must have a non-``None`` ``location`` attribute.
+            Every collection must have a non-empty ``location`` attribute.
             This requirement ensures that the group can maintain a directory
             entry corresponding to every child collection.
 
@@ -189,7 +189,7 @@ class ImageCollectionGroup:
         ValueError
             If ``collections`` is empty.
 
-            Also raised if any child collection has ``location is None``.
+            Also raised if any child collection has an empty ``location``.
 
         Notes
         -----
@@ -229,11 +229,11 @@ class ImageCollectionGroup:
 
         # Then check whether each valid collection has one location.
         for collection in collections:
-            if collection.location is None:
+            if not collection.location:
                 raise ValueError(
                     "Each ImageFileCollection passed to "
                     "ImageCollectionGroup.from_collections() "
-                    "must have a non-None location."
+                    "must have a non-empty location."
                 )
 
         directories = tuple(
