@@ -423,3 +423,27 @@ def test_from_collections_rejects_non_iterable_input() -> None:
         match="must be an ImageFileCollection or an iterable",
     ):
         ImageCollectionGroup.from_collections(42)
+
+
+def test_directories_property_returns_normalized_directories(
+    image_directories: tuple[Path, Path],
+) -> None:
+    directory_a, directory_b = image_directories
+
+    group = ImageCollectionGroup([directory_a, directory_b])
+
+    assert group.directories == (
+        directory_a.resolve(),
+        directory_b.resolve(),
+    )
+
+
+def test_collections_property_returns_child_collections(
+    image_collections: tuple[ImageFileCollection, ImageFileCollection],
+) -> None:
+    collection_a, collection_b = image_collections
+    group = ImageCollectionGroup.from_collections(image_collections)
+
+    assert group.collections == (collection_a, collection_b)
+    assert group.collections[0] is collection_a
+    assert group.collections[1] is collection_b

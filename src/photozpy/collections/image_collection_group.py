@@ -334,3 +334,11 @@ class ImageCollectionGroup:
         ...     print(directory, collection.location)
         """
         return zip(self._directories, self._collections)
+
+    @property
+    def directories(self) -> tuple[Path, ...]:
+        return self._directories
+
+    @property
+    def collections(self) -> tuple[ImageFileCollection, ...]:
+        return self._collections
