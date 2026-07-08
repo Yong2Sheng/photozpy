@@ -29,7 +29,7 @@ from astropy.wcs.utils import skycoord_to_pixel
 from astropy_healpix import HEALPix
 
 # Local imports
-from .fits_image import get_fov_center_skycoord, get_wcs
+from ..fits_utilities import get_fov_center_skycoord, get_wcs
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
