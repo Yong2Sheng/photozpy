@@ -1,20 +1,3 @@
-from pathlib import Path
-
-import matplotlib
-
-matplotlib.use("Agg")
-
-import matplotlib.pyplot as plt
-import numpy as np
-import pytest
-from astropy.coordinates import SkyCoord
-from astropy.io import fits
-from astropy.nddata import CCDData
-from astropy.visualization import AsinhStretch, ImageNormalize, SqrtStretch
-from astropy.wcs import WCS
-from matplotlib.axes import Axes
-from matplotlib.figure import Figure
-
 from photozpy.fits_utilities import (
     MissingWCSError,
     create_image_norm,
@@ -23,6 +6,21 @@ from photozpy.fits_utilities import (
     has_wcs,
     plot_image,
 )
+from matplotlib.figure import Figure
+from matplotlib.axes import Axes
+from astropy.wcs import WCS
+from astropy.visualization import AsinhStretch, ImageNormalize, SqrtStretch
+from astropy.nddata import CCDData
+from astropy.io import fits
+from astropy.coordinates import SkyCoord
+import pytest
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
 
 
 def _write_fits_image(
