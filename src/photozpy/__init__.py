@@ -1,40 +1,48 @@
-from .swiftz import SwiftDownload, SwiftCombine, CCD_Regions, PhotozRegions
-from .telescope import Telescope, CCD, FilterSet
+from .calibration import (
+    Artifacts,
+    Combine,
+    HeaderCorrection,
+    HeaderManipulation,
+    PlateSolving,
+    Reduction,
+    Registration,
+)
 from .collection_manager import CollectionManager
 from .collections import ImageCollectionGroup
-from .calibration import HeaderCorrection, HeaderManipulation, Combine, Reduction, Registration, PlateSolving, Artifacts
-from .photometry import SourceDetection, Photometry, SwiftPhotometry
-from .mimage_collection import mImageFileCollection
-from .sources import MagnitudeInfo, BaseSourceInfo, Sources
-from .standard_stars import StandardStarCatalog
 from .interactive_ds9 import ImageReviewer
+from .mimage_collection import mImageFileCollection
+from .photometry import Photometry, SourceDetection, SwiftPhotometry
+from .sources import BaseSourceInfo, MagnitudeInfo, Sources
+from .standard_stars import StandardStarCatalog
+from .swiftz import CCD_Regions, PhotozRegions, SwiftCombine, SwiftDownload
+from .telescope import CCD, FilterSet, Telescope
 
 __version__ = "0.1.0"  # simple, importable version for tooling/tests
 
 __all__ = [
-    "SwiftDownload",
-    "SwiftCombine",
+    "CCD",
+    "Artifacts",
+    "BaseSourceInfo",
     "CCD_Regions",
-    "Telescope",
     "CollectionManager",
+    "Combine",
+    "FilterSet",
     "HeaderCorrection",
     "HeaderManipulation",
-    "Combine",
-    "Reduction",
-    "Registration",
-    "PlateSolving",
-    "Artifacts",
-    "SourceDetection",
-    "Photometry",
-    "SwiftPhotometry",
-    "mImageFileCollection",
-    "MagnitudeInfo",
-    "BaseSourceInfo",
-    "Sources",
-    "PhotozRegions",
-    "CCD",
-    "StandardStarCatalog",
-    "FilterSet",
     "ImageCollectionGroup",
     "ImageReviewer",
+    "MagnitudeInfo",
+    "Photometry",
+    "PhotozRegions",
+    "PlateSolving",
+    "Reduction",
+    "Registration",
+    "SourceDetection",
+    "Sources",
+    "StandardStarCatalog",
+    "SwiftCombine",
+    "SwiftDownload",
+    "SwiftPhotometry",
+    "Telescope",
+    "mImageFileCollection",
 ]
