@@ -5,6 +5,7 @@ from .collections import ImageCollectionGroup
 from .calibration import HeaderCorrection, HeaderManipulation, Combine, Reduction, Registration, PlateSolving, Artifacts
 from .photometry import SourceDetection, Photometry, SwiftPhotometry
 from .mimage_collection import mImageFileCollection
+from .sources import MagnitudeInfo, BaseSourceInfo, Sources
 from .standard_stars import StandardStarCatalog
 from .interactive_ds9 import ImageReviewer
 
@@ -27,6 +28,9 @@ __all__ = [
     "Photometry",
     "SwiftPhotometry",
     "mImageFileCollection",
+    "MagnitudeInfo",
+    "BaseSourceInfo",
+    "Sources",
     "PhotozRegions",
     "CCD",
     "StandardStarCatalog",
