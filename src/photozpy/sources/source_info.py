@@ -7,7 +7,6 @@ from typing import Literal, TypeAlias
 
 from astropy.coordinates import SkyCoord
 
-from ..telescope import Telescope
 from .observation_field import ObservationField
 
 SourceRole: TypeAlias = Literal["science", "standard"]
