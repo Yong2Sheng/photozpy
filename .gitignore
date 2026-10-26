@@ -21,3 +21,4 @@ tests/coverage_report/
 
 # Project-specific
 src/photozpy/calibration/testing_files/
+/data/astrometry-indexes/
