@@ -154,6 +154,52 @@ xpaget ds9 version
 
 This should return the running DS9 version. DS9 is required for the interactive DS9 features, rather than for every pipeline operation.
 
+#### Image review from a notebook on macOS
+
+`ImageReviewer` runs its Tk controls in a separate Python process by default
+on macOS. Quit closes that process and its Dock application, while the notebook
+kernel stays alive. DS9 itself remains open. Restart the notebook kernel once
+after updating from the older in-process reviewer to clear its native Tk state.
+
+```python
+from pathlib import Path
+from photozpy import ImageReviewer
+
+night = Path("/absolute/path/to/working-night")
+images = sorted(
+    path for path in night.iterdir()
+    if path.is_file()
+    and not path.name.startswith(".")
+    and path.suffix.lower() in {".fits", ".fit", ".fts"}
+)
+reviewer = ImageReviewer(images, night / "rejected")
+rejected = reviewer.run()
+```
+
+Hidden filenames (including macOS `._` sidecars) are also excluded by the
+reviewer. Display and filesystem errors appear inside the control window,
+without native modal dialogs. A display error leaves Good/Reject disabled and
+Retry available. Review completion keeps Back available until Quit is clicked.
+
+Reject moves files; use a working copy of the night for review. Back restores a
+rejected file during the same session. Refresh primary image collections after
+reviewing, then recreate their filtered selections.
+
+In isolated mode, `images`, `index`, `history`, `rejected`, and the return value
+are available in the notebook, but Tk widgets such as `reject_button` belong to
+the GUI process and cannot be configured from the notebook.
+GUI actions such as `mark_reject()` must also be performed using the window's
+buttons rather than by calling methods on the notebook-side object. Standard
+`DS9Adapter` target settings are forwarded to the child. Custom adapters use
+in-process mode by default, or explicitly pass `isolated=False` for GUI-level
+development; this does not provide macOS kernel isolation.
+
+Interrupting the notebook stops the child and restores its latest decision
+checkpoint on `reviewer`; completed moves are not automatically undone. If the
+GUI process fails, `run()` raises an error with worker diagnostics and restores
+the latest checkpoint. A closed session cannot be run again; create another
+`ImageReviewer` for the next review. The reviewer does not alter FITS contents.
+
 ## Quick start
 
 Tutorial notebooks are under `docs/`, for example:

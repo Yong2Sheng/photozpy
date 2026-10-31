@@ -11,11 +11,13 @@ from photozpy.interactive_ds9 import image_reviewer as reviewer_module
 from photozpy.interactive_ds9.adapter import DS9Adapter
 from photozpy.interactive_ds9.image_reviewer import ImageReviewer
 
+_show_error = ImageReviewer._show_error
+
 
 class FakeVariable:
     """Small replacement for ``tk.StringVar`` used in headless tests."""
 
-    def __init__(self) -> None:
+    def __init__(self, **kwargs: object) -> None:
         self.value = ""
 
     def set(self, value: str) -> None:
@@ -118,9 +120,8 @@ def fake_tkinter(
     monkeypatch.setattr(reviewer_module.tk, "Frame", FakeWidget)
     monkeypatch.setattr(reviewer_module.tk, "Button", FakeWidget)
     monkeypatch.setattr(
-        reviewer_module.messagebox,
-        "showerror",
-        lambda title, message: errors.append((title, message)),
+        ImageReviewer, "_show_error",
+        lambda self, title, message: errors.append((title, message)),
     )
     # Most tests exercise state transitions, not diagnostic file output.
     monkeypatch.setattr(ImageReviewer, "_debug", lambda self, message: None)
@@ -445,8 +446,110 @@ def test_run_returns_after_quit_callback_in_explicit_update_loop(
 
     assert result == []
     adapter.load_fits.assert_called_once_with(image.resolve())
-    assert root.update_idletasks_calls == 1
+    assert root.update_idletasks_calls == 2
     assert root.update_calls == 1
     assert root.quit_called is True
     assert root.destroy_called is True
     assert reviewer._is_running is False
+
+
+def test_hidden_sidecars_are_not_reviewed(tmp_path, fake_tkinter):
+    image = tmp_path / "image.fits"
+    sidecar = tmp_path / "._image.fits"
+    reviewer = _create_reviewer([sidecar, image], tmp_path / "rejected")
+    assert reviewer.images == [image.resolve()]
+
+
+def test_errors_are_visible_without_a_modal_dialog(tmp_path, fake_tkinter):
+    reviewer = _create_reviewer([], tmp_path / "rejected")
+    _show_error(reviewer, "DS9 error", "Could not load image")
+    assert reviewer.error_message == "DS9 error: Could not load image"
+    assert reviewer.error_label.cget("text") == reviewer.error_message
+
+
+def test_interrupt_cleans_up_tk(tmp_path, fake_tkinter):
+    reviewer = _create_reviewer([], tmp_path / "rejected")
+
+    def interrupt():
+        raise KeyboardInterrupt
+
+    reviewer.root.on_update = interrupt
+    with pytest.raises(KeyboardInterrupt):
+        reviewer.run()
+    assert reviewer.root.destroy_called
+    assert not reviewer._is_running
+    with pytest.raises(RuntimeError, match="closed"):
+        reviewer.run()
+
+
+def test_initial_display_exception_cleans_up_tk(tmp_path, fake_tkinter):
+    reviewer = _create_reviewer([], tmp_path / "rejected")
+    reviewer.show_current = Mock(side_effect=ValueError("display setup failed"))
+    with pytest.raises(ValueError, match="display setup failed"):
+        reviewer.run()
+    assert reviewer.root.destroy_called
+    assert not reviewer._is_running
+
+
+def test_checkpoint_tracks_reject_and_back(tmp_path, fake_tkinter):
+    import json
+
+    image = _write_placeholder_fits(tmp_path / "source" / "image.fits")
+    reviewer = _create_reviewer([image], tmp_path / "rejected")
+    reviewer._state_path = tmp_path / "state.json"
+    reviewer.mark_reject()
+    state = json.loads(reviewer._state_path.read_text())
+    assert state["history"] == ["reject"]
+    assert state["index"] == 1
+    assert state["rejected"] == [str(tmp_path / "rejected" / image.name)]
+    reviewer.go_back()
+    state = json.loads(reviewer._state_path.read_text())
+    assert state == {"index": 0, "history": [], "rejected": []}
+    assert image.exists()
+
+
+def test_macos_default_never_constructs_tk_in_parent(tmp_path, monkeypatch):
+    monkeypatch.setattr(reviewer_module.sys, "platform", "darwin")
+    monkeypatch.setattr(ImageReviewer, "_debug", lambda *args: None)
+    create_tk = Mock(side_effect=AssertionError("Tk created in notebook"))
+    monkeypatch.setattr(reviewer_module.tk, "Tk", create_tk)
+    from photozpy.interactive_ds9 import _review_process
+
+    def worker(images, rejected_dir, config, restore_state):
+        restore_state({"index": 1, "history": ["good"], "rejected": []})
+
+    monkeypatch.setattr(_review_process, "run_isolated", worker)
+    reviewer = ImageReviewer([tmp_path / "image.fits"], tmp_path / "rejected")
+    assert reviewer.run() == []
+    assert reviewer.index == 1
+    assert reviewer.history == ["good"]
+    assert reviewer._closed
+    create_tk.assert_not_called()
+
+
+def test_isolated_gui_actions_cannot_move_files_in_parent(tmp_path, monkeypatch):
+    monkeypatch.setattr(ImageReviewer, "_debug", lambda *args: None)
+    image = _write_placeholder_fits(tmp_path / "source" / "image.fits")
+    rejected = tmp_path / "rejected"
+    reviewer = ImageReviewer([image], rejected, isolated=True)
+    for action in (
+        reviewer.mark_good, reviewer.mark_reject, reviewer.go_back,
+        reviewer.show_current, reviewer.finish, reviewer.quit_review,
+    ):
+        with pytest.raises(RuntimeError, match="Use the buttons"):
+            action()
+    assert image.exists()
+    assert not rejected.exists()
+    assert reviewer.history == []
+
+
+def test_custom_adapter_subclass_stays_in_process(tmp_path, fake_tkinter, monkeypatch):
+    monkeypatch.setattr(reviewer_module.sys, "platform", "darwin")
+
+    class CustomAdapter(DS9Adapter):
+        def __init__(self):
+            pass
+
+    reviewer = ImageReviewer([], tmp_path / "rejected", adapter=CustomAdapter())
+    assert not reviewer._isolated
+    assert isinstance(reviewer.root, FakeRoot)
