@@ -7,11 +7,12 @@ queue and moves rejected files to a user-provided directory.
 """
 
 from datetime import datetime
+import json
 from pathlib import Path
 import shutil
+import sys
 import time
 import tkinter as tk
-from tkinter import messagebox
 from typing import Iterable
 
 from .adapter import DS9Adapter
@@ -37,6 +38,11 @@ class ImageReviewer:
     adapter
         Optional DS9 adapter.  Supplying one is mainly useful for tests or for
         targeting a non-default DS9/XPA access point.
+    isolated
+        Run the GUI in a separate Python process. Defaults to True on macOS
+        for the standard DS9 adapter, keeping Tk out of the notebook kernel.
+        Custom adapters default to in-process operation. GUI widget attributes
+        are available only in-process. Hidden filenames are excluded.
     """
 
     def __init__(
@@ -44,25 +50,45 @@ class ImageReviewer:
         images: Iterable[str | Path],
         rejected_dir: str | Path,
         adapter: DS9Adapter | None = None,
+        *,
+        isolated: bool | None = None,
     ) -> None:
         """Initialize image paths, review state, and the Tk control window."""
 
         self.images: list[Path] = [
             Path(path).expanduser().resolve()
             for path in images
+            if not Path(path).name.startswith(".")
         ]
 
         self.rejected_dir: Path = Path(rejected_dir).expanduser().resolve()
 
-        self.adapter: DS9Adapter = adapter or DS9Adapter()
+        # Subclasses may carry custom behavior that cannot be sent to a worker.
+        adapter_type = type(adapter)
+        standard_adapter = adapter is None or adapter_type is DS9Adapter
+        self._isolated = (
+            sys.platform == "darwin" and standard_adapter
+            if isolated is None else isolated
+        )
+        if self._isolated and not standard_adapter:
+            raise TypeError("Custom adapters require isolated=False.")
+        self.adapter = adapter
 
         self.index: int = 0
         self.rejected: list[Path] = []
         self.history: list[str] = []
         self._is_running: bool = False
+        self._closed = False
+        self._state_path: Path | None = None
+        self.error_message: str = ""
         self.debug_log_path: Path = Path("ds9_reviewer_debug.log").resolve()
         self._debug("--- new ImageReviewer session ---")
         self._debug("init: created ImageReviewer")
+
+        if self._isolated:
+            return
+
+        self.adapter = adapter if adapter is not None else DS9Adapter()
 
         self.root: tk.Tk = tk.Tk()
         self.root.title("Photozpy DS9 Image Review")
@@ -70,13 +96,19 @@ class ImageReviewer:
         self.root.protocol("WM_DELETE_WINDOW", self.quit_review)
         self._debug("init: created Tk root")
 
-        self.status: tk.StringVar = tk.StringVar()
+        self.status: tk.StringVar = tk.StringVar(master=self.root)
         tk.Label(
             self.root,
             textvariable=self.status,
             width=60,
             anchor="w",
         ).pack(padx=12, pady=(12, 8))
+
+        self.error_label = tk.Label(
+            self.root, text="", wraplength=600, justify=tk.LEFT,
+            anchor="w", fg="firebrick",
+        )
+        self.error_label.pack(padx=12, pady=(0, 8))
 
         button_frame: tk.Frame = tk.Frame(self.root)
         button_frame.pack(padx=12, pady=(0, 12))
@@ -138,6 +170,37 @@ class ImageReviewer:
         except OSError:
             pass
 
+    def _show_error(self, title: str, message: str) -> None:
+        """Report errors in the control window, without a native modal dialog."""
+        self.error_message = f"{title}: {message}"
+        self.error_label.config(text=self.error_message)
+        self._debug(self.error_message)
+
+    def _require_local_gui(self) -> None:
+        if self._isolated:
+            raise RuntimeError(
+                "Use the buttons in the isolated review window; "
+                "notebook-side GUI actions are unavailable."
+            )
+
+    def _save_state(self) -> None:
+        """Checkpoint decisions before the next external display operation."""
+        if self._state_path is None:
+            return
+        state = {
+            "index": self.index,
+            "history": self.history,
+            "rejected": [str(path) for path in self.rejected],
+        }
+        temporary = self._state_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(state), encoding="utf-8")
+        temporary.replace(self._state_path)
+
+    def _restore_state(self, state: dict) -> None:
+        self.index = state["index"]
+        self.history = list(state["history"])
+        self.rejected = [Path(path) for path in state["rejected"]]
+
     @property
     def current_image(self) -> Path:
         """Return the image at the current review position.
@@ -156,7 +219,11 @@ class ImageReviewer:
         again without advancing the queue.
         """
 
+        self._require_local_gui()
         self._debug(f"show_current: entered index={self.index}")
+        self._save_state()
+        self.error_message = ""
+        self.error_label.config(text="")
 
         if self.index >= len(self.images):
             self._debug("show_current: index past end, finishing")
@@ -180,7 +247,7 @@ class ImageReviewer:
             )
             self.retry_button.config(state=tk.NORMAL)
 
-            messagebox.showerror(
+            self._show_error(
                 "DS9 error",
                 f"Could not display:\n{path}\n\n{error}",
             )
@@ -197,6 +264,7 @@ class ImageReviewer:
     def mark_good(self) -> None:
         """Accept the current image and advance to the next image."""
 
+        self._require_local_gui()
         self._debug(f"mark_good: index={self.index}")
         self.history.append("good")
         self.index += 1
@@ -210,6 +278,7 @@ class ImageReviewer:
         but does not reject any images.
         """
 
+        self._require_local_gui()
         source: Path = self.current_image
         self._debug(f"mark_reject: source={source}")
 
@@ -217,7 +286,7 @@ class ImageReviewer:
             self.rejected_dir.mkdir(parents=True, exist_ok=True)
         except OSError as error:
             self._debug(f"mark_reject: mkdir failed: {error}")
-            messagebox.showerror(
+            self._show_error(
                 "Reject error",
                 f"Could not create rejected directory:\n"
                 f"{self.rejected_dir}\n\n{error}",
@@ -228,7 +297,7 @@ class ImageReviewer:
 
         if destination.exists():
             self._debug(f"mark_reject: destination exists: {destination}")
-            messagebox.showerror(
+            self._show_error(
                 "Reject error",
                 f"Rejected file already exists:\n{destination}",
             )
@@ -238,7 +307,7 @@ class ImageReviewer:
             shutil.move(str(source), str(destination))
         except OSError as error:
             self._debug(f"mark_reject: move failed: {error}")
-            messagebox.showerror(
+            self._show_error(
                 "Reject error",
                 f"Could not reject:\n{source}\n\n{error}",
             )
@@ -258,6 +327,7 @@ class ImageReviewer:
         rejected file back to its original path before changing the index.
         """
 
+        self._require_local_gui()
         self._debug(f"go_back: entered index={self.index}")
 
         if self.index == 0 or not self.history:
@@ -277,7 +347,7 @@ class ImageReviewer:
 
             if source.exists():
                 self._debug(f"go_back: source already exists: {source}")
-                messagebox.showerror(
+                self._show_error(
                     "Restore error",
                     f"Original path already exists:\n{source}",
                 )
@@ -287,7 +357,7 @@ class ImageReviewer:
                 self._debug(
                     f"go_back: rejected file missing: {rejected_path}"
                 )
-                messagebox.showerror(
+                self._show_error(
                     "Restore error",
                     f"Rejected file does not exist:\n{rejected_path}",
                 )
@@ -298,7 +368,7 @@ class ImageReviewer:
                 shutil.move(str(rejected_path), str(source))
             except OSError as error:
                 self._debug(f"go_back: restore failed: {error}")
-                messagebox.showerror(
+                self._show_error(
                     "Restore error",
                     f"Could not restore:\n{rejected_path}\n\n{error}",
                 )
@@ -314,8 +384,12 @@ class ImageReviewer:
     def quit_review(self) -> None:
         """Close the review window and stop the reviewer event loop."""
 
+        self._require_local_gui()
         self._debug("quit_review: entered")
         self._is_running = False
+        if self._closed:
+            return
+        self._closed = True
 
         try:
             self._debug("quit_review: before quit")
@@ -335,6 +409,7 @@ class ImageReviewer:
     def finish(self) -> None:
         """Mark the review as complete and disable decision buttons."""
 
+        self._require_local_gui()
         self._debug("finish: entered")
         self.status.set(
             f"Review complete. Rejected: {len(self.rejected)}"
@@ -349,34 +424,49 @@ class ImageReviewer:
     def run(self) -> list[Path]:
         """Run the GUI event loop and return successfully rejected paths.
 
-        The loop uses explicit ``update()`` calls instead of Tk's blocking
-        ``mainloop()``.  This is more stable when the reviewer is launched from
-        a Jupyter notebook, where Tk's native event loop can leave the cell in a
-        stuck state even after the window is destroyed.
+        macOS uses a disposable GUI process by default. Other platforms and
+        custom in-process adapters use the explicit Tk update loop. Interrupts
+        close the GUI; completed file decisions are not rolled back.
         """
+
+        if self._closed:
+            raise RuntimeError("This review session is closed; create a new reviewer.")
+        if self._isolated:
+            from ._review_process import run_isolated
+
+            config = None if self.adapter is None else {
+                "software_name": self.adapter.software_name,
+                "reset_scale_on_load": self.adapter.reset_scale_on_load,
+            }
+            self._is_running = True
+            try:
+                run_isolated(
+                    self.images, self.rejected_dir, config, self._restore_state,
+                )
+            finally:
+                self._is_running = False
+                self._closed = True
+            return self.rejected
 
         self._debug("run: entered")
         self._is_running = True
 
-        if not self.images:
-            self._debug("run: no images")
-            self.finish()
-        else:
+        try:
+            # Map the controls before attempting external DS9 communication.
+            self.root.update_idletasks()
             self.show_current()
-
-        self._debug("run: before update loop")
-        while self._is_running:
-            try:
-                # Keep control in Python instead of handing the whole thread to
-                # Tk.  This makes notebook shutdown behavior much easier to
-                # control and diagnose.
-                self.root.update_idletasks()
-                self.root.update()
-            except tk.TclError as error:
-                self._debug(f"run: update loop TclError: {error}")
-                self._is_running = False
-                break
-            time.sleep(0.01)
+            self._debug("run: before update loop")
+            while self._is_running:
+                try:
+                    self.root.update_idletasks()
+                    self.root.update()
+                except tk.TclError as error:
+                    self._debug(f"run: update loop TclError: {error}")
+                    break
+                if self._is_running:
+                    time.sleep(0.01)
+        finally:
+            self.quit_review()
         self._debug("run: after update loop")
 
         self._debug("run: returning")
