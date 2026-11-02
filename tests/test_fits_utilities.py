@@ -5,6 +5,7 @@ from photozpy.fits_utilities import (
     get_wcs,
     has_wcs,
     plot_image,
+    update_fits_header,
 )
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
@@ -21,6 +22,77 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
+
+
+def test_update_header_preserves_all_hdus_and_original_file(tmp_path):
+    source = tmp_path / "raw.fits"
+    output = tmp_path / "processed" / "raw.fits"
+    primary = np.arange(12, dtype=np.int16).reshape(3, 4)
+    extension = np.arange(6, dtype=np.float32).reshape(2, 3)
+    fits.HDUList([
+        fits.PrimaryHDU(primary),
+        fits.ImageHDU(extension, name="SCI"),
+    ]).writeto(source)
+    before = source.read_bytes()
+
+    written = update_fits_header(
+        source, {"OBJECT": ("field_a", "Observation field")},
+        output_path=output,
+    )
+
+    assert written == output
+    assert source.read_bytes() == before
+    with fits.open(output) as hdul:
+        assert len(hdul) == 2
+        assert hdul[0].header["OBJECT"] == "field_a"
+        assert hdul[0].header.comments["OBJECT"] == "Observation field"
+        np.testing.assert_array_equal(hdul[0].data, primary)
+        np.testing.assert_array_equal(hdul[1].data, extension)
+        assert hdul[1].name == "SCI"
+
+
+def test_update_header_requires_explicit_overwrite(tmp_path):
+    source = _write_fits_image(tmp_path / "raw.fits")
+    before = source.read_bytes()
+    with pytest.raises(FileExistsError):
+        update_fits_header(source, {"OBJECT": "field_a"})
+    assert source.read_bytes() == before
+    update_fits_header(source, {"OBJECT": "field_a"}, overwrite=True)
+    assert fits.getheader(source)["OBJECT"] == "field_a"
+
+
+def test_failed_header_update_does_not_damage_input(tmp_path):
+    source = _write_fits_image(tmp_path / "raw.fits")
+    before = source.read_bytes()
+    with pytest.raises(ValueError):
+        update_fits_header(source, {"OBJECT": object()}, overwrite=True)
+    assert source.read_bytes() == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["raw.fits"]
+
+
+def test_update_header_edits_only_requested_extension(tmp_path):
+    source = tmp_path / "raw.fits"
+    fits.HDUList([
+        fits.PrimaryHDU(), fits.ImageHDU(np.ones((2, 2)), name="SCI")
+    ]).writeto(source)
+    update_fits_header(
+        source, {"TESTKEY": 42}, hdu_index=1, overwrite=True
+    )
+    with fits.open(source) as hdul:
+        assert "TESTKEY" not in hdul[0].header
+        assert hdul[1].header["TESTKEY"] == 42
+
+
+def test_update_header_preserves_unsigned_scaling_and_checksums(tmp_path):
+    source = tmp_path / "unsigned.fits"
+    data = np.array([[0, 32768, 65535]], dtype=np.uint16)
+    fits.PrimaryHDU(data).writeto(source, checksum=True)
+    update_fits_header(source, {"FIELD": "science_field"}, overwrite=True)
+    with fits.open(source, checksum=True) as hdul:
+        np.testing.assert_array_equal(hdul[0].data, data)
+        assert hdul[0].header['BZERO'] == 32768
+        assert hdul[0].verify_checksum() == 1
+        assert hdul[0].verify_datasum() == 1
 
 
 def _write_fits_image(

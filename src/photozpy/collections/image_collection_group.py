@@ -27,6 +27,10 @@ class ImageCollectionGroup:
         Keyword arguments forwarded unchanged to each child
         `ccdproc.ImageFileCollection`, except ``location`` and ``filenames``.
 
+        If ``glob_exclude`` is omitted, it defaults to ``"._*"`` to exclude
+        macOS AppleDouble metadata files. An explicit value overrides this
+        default, including ``None`` to disable the exclusion.
+
         ``location`` is controlled by ``directories``. ``filenames`` is not
         accepted because one shared filename list does not have an unambiguous
         meaning across multiple directories.
@@ -86,6 +90,10 @@ class ImageCollectionGroup:
             Keyword arguments forwarded to every child
             `ccdproc.ImageFileCollection`.
 
+            By default, ``glob_exclude="._*"`` excludes macOS AppleDouble
+            metadata files before FITS headers are read. Explicitly supplied
+            exclusion rules are preserved.
+
             ``location`` and ``filenames`` are reserved and cannot be passed.
             ``location`` is determined by each item in ``directories``.
             ``filenames`` is intentionally unsupported because different
@@ -134,6 +142,11 @@ class ImageCollectionGroup:
             raise ValueError(
                 "'directories' must contain at least one directory."
             )
+
+        # AppleDouble files can have FITS extensions but contain no FITS data.
+        # Keep the exclusion in the child's discovery configuration so refresh
+        # also skips these files. Respect explicitly supplied exclusion rules.
+        image_file_collection_kwargs.setdefault("glob_exclude", "._*")
 
         # Create one child ImageFileCollection for each directory.
         self._collections = tuple(

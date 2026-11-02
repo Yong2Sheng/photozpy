@@ -7,7 +7,10 @@ without constructing subprocess calls directly.
 """
 
 from pathlib import Path
+from shutil import which
 import subprocess
+import sys
+import time
 
 from .dependencies import XPACommands, find_xpa_commands
 
@@ -25,19 +28,73 @@ class DS9Adapter:
         XPA access point name.  The default ``"ds9"`` targets the usual DS9
         instance.
     reset_scale_on_load
-        Kept as an adapter-level option for future display policy work.  The
-        current implementation applies the scale arguments passed to
-        :meth:`load_fits` directly.
+        If True, reapply the default scale settings on every image load.
+        Default is False: initialize the first image with zscale/asinh and
+        leave subsequent manual DS9 scale choices unchanged. Explicit scale
+        arguments to load_fits always take precedence.
     """
 
     def __init__(
         self,
         software_name: str = "ds9",
-        reset_scale_on_load: bool = True,
+        reset_scale_on_load: bool = False,
     ) -> None:
         self.software_name: str = software_name
         self.commands: XPACommands = find_xpa_commands()
         self.reset_scale_on_load: bool = reset_scale_on_load
+        self._has_loaded_image: bool = False
+        self._started_process: subprocess.Popen | None = None
+
+    def verify_image_loaded(self) -> None:
+        """Require an actual FITS image, not just successful command delivery.
+
+        Controllers use this on initial display to avoid enabling navigation
+        over empty frames after a silently ignored or unsupported load request.
+        """
+        loaded = self.get('frame', 'has', 'fits').strip().lower()
+        if loaded not in ('1', 'yes', 'true'):
+            raise DS9CommunicationError('DS9 has no FITS image in the active frame; loading failed.')
+
+    def ensure_running(self, timeout: float = 15.) -> None:
+        """Connect to this XPA target, or launch DS9 and await readiness.
+
+        Used by quality review and automatic comparison previews.
+        Find ds9 on PATH or in the standard macOS application bundle. Leave
+        the DS9 application open when the comparison controls are closed.
+        """
+        def ready() -> bool:
+            try:
+                version = self.get('version')
+                return bool(version) and 'XPA$ERROR' not in version
+            except DS9CommunicationError:
+                return False
+
+        if ready():
+            return
+
+        executable = which('ds9')
+        if executable is None and sys.platform == 'darwin':
+            app_binary = Path('/Applications/SAOImageDS9.app/Contents/MacOS/ds9')
+            if app_binary.is_file():
+                executable = str(app_binary)
+        if executable is None:
+            raise FileNotFoundError('DS9 executable not found; install DS9 or add ds9 to PATH.')
+
+        self._started_process = subprocess.Popen(
+            [executable, '-title', self.software_name],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+        self._has_loaded_image = False
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if ready():
+                return
+            if self._started_process.poll() is not None:
+                break
+            time.sleep(0.1)
+
+        raise DS9CommunicationError('DS9 did not become available; open DS9 and retry preview.')
 
     def set(self, *args: str) -> None:
         """Send an ``xpaset -p`` command to DS9.
@@ -91,19 +148,71 @@ class DS9Adapter:
     def load_fits(
         self,
         path: str | Path,
-        scale_mode: str = "zscale",
-        scale_function: str = "asinh",
+        scale_mode: str | None = None,
+        scale_function: str | None = None,
+        *,
+        configure_display: bool = True,
+        hdu: str | int | None = None,
     ) -> None:
-        """Load a FITS image into DS9 and apply default display settings.
+        """Load a FITS image without repeatedly overriding manual scale choices.
+
+        Parameters
+        ----------
+        path : str or Path
+            FITS image to display in the active DS9 frame.
+        scale_mode : str or None, optional
+            Explicit scale-limit mode, such as zscale or minmax. None uses
+            zscale on the first load or when reset_scale_on_load is True;
+            otherwise no scale-mode command is sent.
+        scale_function : str or None, optional
+            Explicit stretch function, such as log or asinh. None uses asinh
+            on the first load or when reset_scale_on_load is True; otherwise
+            no stretch command is sent, preserving the current DS9 choice.
+        configure_display : bool, optional
+            Default True retains the normal scale initialization and zoom-to-fit.
+            False sends only the image-load command, leaving display geometry
+            and scaling to DS9/the comparison controller. Explicit scale
+            arguments cannot be combined with False.
+        hdu : str, int, or None, optional
+            Select a FITS extension by name or index, e.g. 'CMASK'. None uses
+            the normal DS9 default image selection.
 
         Paths are resolved and quoted before being sent to DS9 because DS9's
         XPA parser treats spaces in unquoted paths as separate command tokens.
+        Zoom-to-fit is still applied to every image. A failed load does not
+        mark initialization complete, allowing Retry to initialize the display.
         """
 
-        self.set("fits", _quote_path(path))
-        self.set_scale_mode(scale_mode)
-        self.set_scale_function(scale_function)
+        if not configure_display and (scale_mode is not None or scale_function is not None):
+            raise ValueError('Explicit scale settings require configure_display=True.')
+
+        filename = _quote_path(path)
+        if hdu is not None:
+            valid_index = isinstance(hdu, int) and not isinstance(hdu, bool) and hdu >= 0
+            valid_name = isinstance(hdu, str) and bool(hdu) and all(
+                char.isascii() and (char.isalnum() or char in '_-') for char in hdu
+            )
+            if not (valid_index or valid_name):
+                raise ValueError('hdu must be a nonnegative index or a simple FITS extension name.')
+            filename = filename[:-1] + f'[{hdu}]"'
+
+        self.set('fits', filename)
+        if not configure_display:
+            return
+
+        initialize_scale: bool = (
+            self.reset_scale_on_load or not self._has_loaded_image
+        )
+        if scale_mode is not None or initialize_scale:
+            self.set_scale_mode("zscale" if scale_mode is None else scale_mode)
+
+        if scale_function is not None or initialize_scale:
+            self.set_scale_function(
+                "asinh" if scale_function is None else scale_function
+            )
+
         self.zoom_to_fit()
+        self._has_loaded_image = True
 
     def set_zscale(self) -> None:
         """Set DS9's scale mode to ``zscale``."""
