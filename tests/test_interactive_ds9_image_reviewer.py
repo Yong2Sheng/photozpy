@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -47,6 +47,10 @@ class FakeWidget:
         """Apply state changes in the same style as a Tk widget."""
 
         self.options.update(kwargs)
+
+    def pack_forget(self) -> None:
+        """Hide a preview-only control without requiring native Tk."""
+        self.pack_options = {'hidden': True}
 
     def cget(self, key: str) -> object:
         """Return one configured option through the normal Tk widget API."""
@@ -136,7 +140,7 @@ def _create_reviewer(
     """Construct a reviewer after the headless Tk fixture is active."""
 
     if adapter is None:
-        adapter = Mock(spec=DS9Adapter)
+        adapter = MagicMock(spec=DS9Adapter)
     return ImageReviewer(images, rejected_dir, adapter=adapter)
 
 
@@ -146,6 +150,40 @@ def _write_placeholder_fits(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"temporary test image")
     return path
+
+
+@pytest.mark.usefixtures('fake_tkinter')
+def test_review_starts_ds9_once_then_reuses_it(tmp_path):
+    image = _write_placeholder_fits(tmp_path / 'image.fits')
+    reviewer = _create_reviewer([image], tmp_path / 'rejected')
+    reviewer.show_current()
+    reviewer.show_current()
+    reviewer.adapter.ensure_running.assert_called_once_with()
+    reviewer.adapter.verify_image_loaded.assert_called_once_with()
+
+
+@pytest.mark.usefixtures('fake_tkinter')
+def test_empty_initial_frame_disables_quality_decisions(tmp_path):
+    image = _write_placeholder_fits(tmp_path / 'image.fits')
+    reviewer = _create_reviewer([image], tmp_path / 'rejected')
+    reviewer.adapter.verify_image_loaded.side_effect = RuntimeError('no FITS image')
+    reviewer.show_current()
+    assert reviewer.good_button.options['state'] == 'disabled'
+    assert reviewer.reject_button.options['state'] == 'disabled'
+    assert reviewer.retry_button.options['state'] == 'normal'
+    assert not reviewer._display_verified
+
+
+@pytest.mark.usefixtures('fake_tkinter')
+def test_retry_rechecks_ds9_after_a_failed_load(tmp_path):
+    image = _write_placeholder_fits(tmp_path / 'image.fits')
+    reviewer = _create_reviewer([image], tmp_path / 'rejected')
+    reviewer.adapter.load_fits.side_effect = [RuntimeError('DS9 exited'), None]
+    reviewer.show_current()
+    assert not reviewer._ds9_ready
+    reviewer.show_current()
+    assert reviewer.adapter.ensure_running.call_count == 2
+    assert reviewer._ds9_ready
 
 
 def test_initialization_normalizes_paths_without_creating_rejected_dir(
@@ -177,7 +215,7 @@ def test_show_current_loads_image_and_sets_ready_button_states(
     """A successful DS9 load enables decisions and disables Retry."""
 
     image = tmp_path / "image.fits"
-    adapter = Mock(spec=DS9Adapter)
+    adapter = MagicMock(spec=DS9Adapter)
     reviewer = _create_reviewer([image], tmp_path / "rejected", adapter)
 
     reviewer.show_current()
@@ -198,7 +236,7 @@ def test_show_current_keeps_position_and_enables_retry_after_ds9_error(
     """A display failure cannot accidentally advance or accept an image."""
 
     image = tmp_path / "image.fits"
-    adapter = Mock(spec=DS9Adapter)
+    adapter = MagicMock(spec=DS9Adapter)
     adapter.load_fits.side_effect = RuntimeError("DS9 is unavailable")
     reviewer = _create_reviewer([image], tmp_path / "rejected", adapter)
 
@@ -436,7 +474,7 @@ def test_run_returns_after_quit_callback_in_explicit_update_loop(
     """The custom event loop returns cleanly in the notebook use case."""
 
     image = tmp_path / "image.fits"
-    adapter = Mock(spec=DS9Adapter)
+    adapter = MagicMock(spec=DS9Adapter)
     reviewer = _create_reviewer([image], tmp_path / "rejected", adapter)
     root = cast(FakeRoot, reviewer.root)
     root.on_update = reviewer.quit_review

@@ -6,21 +6,22 @@ Other contributor(s):
 Main function:
 - Find local peaks in the image
 - Fit the centroids of the local peaks
+
+Legacy peak/centroid utilities awaiting their own refactoring. FWHM measurement
+now lives exclusively in photozpy.photometry.fwhm.FWHM; the superseded radial
+FWHM implementation and its private clipping/background helpers were removed.
 """
 
 from ..collection_manager import CollectionManager
 from pathlib import Path
 from photutils.detection import find_peaks
-from photutils.profiles import RadialProfile
 from photutils.centroids import centroid_com, centroid_sources
 from photutils.aperture import CircularAperture
 from astropy.nddata import CCDData
-from astropy.stats import sigma_clipped_stats, median_absolute_deviation
+from astropy.stats import sigma_clipped_stats
 from astropy.visualization import simple_norm
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy import interpolate
-from astropy.io import fits
 
 
 class SourceDetection():
@@ -161,175 +162,3 @@ class SourceDetection():
             print("----------------------------------------\n")
 
         return centroids_dict
-
-    @staticmethod
-    def get_radial_bkg(radial_profile):
-        """
-        Estimate the background from the radial profile.
-
-        Parameters
-        ----------
-        radial_profile: photutils.profiles.radial_profile.RadialProfile; the radial profile object for a source
-
-        Returns
-        -------
-        bkg: float; the estimated background
-        """
-
-        std = radial_profile.profile.std()  # standard deviation
-        # get the boolean list that picks up the radius larger than 1 sigma
-        boo = radial_profile.profile < std
-        if sum(boo) == 0:
-            bkg = None
-        else:
-            # get the radius of 3 sigma
-            sigma3 = radial_profile.radius[boo][0] * 3
-            bkgs = radial_profile.profile[radial_profile.radius > sigma3]
-            if bkgs.shape[0] == 0:
-                bkg = None
-            else:
-                bkg = np.mean(
-                    radial_profile.profile[radial_profile.radius > sigma3])
-
-        return bkg
-
-    @staticmethod
-    def find_fwhm_from_image(
-            image, xycen, edge_radii_end=26, edge_radii_step=0.5):
-        """
-        Find the FWHM at the xy centroids in a image
-
-        Parameters
-        ----------
-        image: str, path.Path; the path of the image
-        xycen: numpy.ndarray; np.array([xcen, ycen])
-        edge_radii_end: int; the radius of the circle used to find the radial profile
-        edge_radii_step: float; the step of each radius step
-
-        returns
-        -------
-        fwhm; float; the measured fwhm
-        """
-
-        # read the ccddata
-        ccddata = CCDData.read(image)
-        data = ccddata.data
-
-        edge_radii = np.arange(0, edge_radii_end, edge_radii_step)
-        rp = RadialProfile(data, xycen, edge_radii, mask=None)
-
-        # calculate bkg
-        bkg = SourceDetection.get_radial_bkg(rp)
-
-        if bkg is None:
-            fwhm = 99
-        else:
-
-            # get half max
-            half_max = (rp.profile.max() + bkg) / 2
-
-            # get FWHM
-            interp_f = interpolate.interp1d(
-                rp.radius, rp.profile, kind="linear")
-            for i in rp.radius:
-                _value = interp_f(i)
-                difference = _value - half_max
-                if difference <= 0:
-                    fwhm = 2 * i
-                    break
-                elif i == rp.radius[-1]:
-                    # print(f"The fit of FWHM failed at xcen:{xycen[0]}; ycen:{xycen[1]} for image {image}")
-                    fwhm = 99  # tag the failed FWHM fit with a large number
-                    break
-
-        return fwhm
-
-    @staticmethod
-    def get_mad_clipped_average(data, mad_sigma=3):
-        """
-        Get the mad clipped average of the input data.
-        Note: This can fail the calculating the fwhm of the night be returning a value of zero for mad = median_absolute_deviation(data.flatten())
-
-        Parameters
-        ----------
-        data: numpy.ndarray
-        mad_sigma: int; the sigma value used to reject the extreme values
-
-        Returns
-        -------
-        data_clipped_average: float
-        """
-
-        median = np.median(data.flatten())
-        # this can be zero, which fails the calculation of boolean1 and
-        # boolean2
-        mad = median_absolute_deviation(data.flatten())
-        boolean1 = (data - median) / mad < mad_sigma
-        boolean2 = (data - median) / mad > -mad_sigma
-        boolean = boolean1 * boolean2
-        data_clipped = data[boolean]
-        data_clipped_average = np.mean(data_clipped).round(4)
-
-        return data_clipped_average
-
-    def find_fwhm(self, edge_radii_end=26, edge_radii_step=0.5,
-                  std_clip_threshold=3, local_peak_detection_threshold=10, fit_box_size=41, centroid_function=centroid_com,
-                  write_fwhm=False):
-        """
-        Find the averge FWHM out of the sources detected in an image collection.
-        Write the FWHM into the fits header
-
-        Parameters
-        ----------
-        None
-
-        Returns
-        -------
-        average_fwhm: float; the averaged fwhm found from the image collection
-        """
-
-        # refresh the full collection to make sure it includes all the Master
-        # Light images
-        self._image_collection = CollectionManager.refresh_collection(
-            self._image_collection, rescan=True)
-
-        fwhm_all = []
-
-        # get the centroid dictionary
-        centroid_dictionary = self.find_centroids(std_clip_threshold=std_clip_threshold,
-                                                  local_peak_detection_threshold=local_peak_detection_threshold,
-                                                  fit_box_size=fit_box_size,
-                                                  centroid_function=centroid_com)
-
-        for image_path, centroids in zip(
-                centroid_dictionary["image_path"], centroid_dictionary["centroids"]):
-
-            image_name = image_path.name
-            print(f"Finding FWHM for {image_name}")
-
-            # edge_radii = np.arange(0, edge_radii_end, edge_radii_step) #
-            # assigned to but never used
-
-            for centroid in centroids:
-
-                fwhm = SourceDetection.find_fwhm_from_image(image_path, centroid,
-                                                            edge_radii_end=edge_radii_end, edge_radii_step=edge_radii_step)
-                fwhm_all += [fwhm]
-
-        fwhm_all = np.array(fwhm_all)
-        fwhm_all = fwhm_all[fwhm_all < 99]  # remove the failed FWHM fits
-        averaged_fwhm, median_fwhm, stddev_fwhm = sigma_clipped_stats(
-            fwhm_all, sigma=3, maxiters=10)  #
-        print("The FWHMs of the image collection are:")
-        print(f"{fwhm_all}")
-        print(f"The FWHM of the night is {averaged_fwhm}.")
-        print("----------------------------------------\n")
-
-        if write_fwhm:
-
-            for image_path in centroid_dictionary["image_path"]:
-                with fits.open(image_path, mode="update") as hdul:
-                    hdul[0].header["FWHM"] = averaged_fwhm
-                    hdul.flush()
-
-        return

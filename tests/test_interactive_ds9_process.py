@@ -84,3 +84,26 @@ def test_success_without_decisions_is_not_reported_as_success(tmp_path, monkeypa
     monkeypatch.setattr(worker.subprocess, "Popen", Mock(return_value=process))
     with pytest.raises(RuntimeError, match="without returning"):
         worker.run_isolated([], tmp_path, None, Mock())
+
+
+def test_comparison_pairs_cross_process_boundary(tmp_path, monkeypatch):
+    process = Mock()
+    process.wait.return_value = 0
+    process.poll.return_value = 0
+    before, after = tmp_path / 'before.fits', tmp_path / 'after.fits'
+    state = {'index': 1, 'history': ['good'], 'rejected': []}
+
+    def start(command, **kwargs):
+        request = json.loads(Path(command[-2]).read_text())
+        assert request['comparison_pairs'] == [[str(before), str(after)]]
+        assert request['adapter']['software_name'] == 'photozpy-cr-preview'
+        Path(command[-1]).write_text(json.dumps(state))
+        return process
+
+    monkeypatch.setattr(worker.subprocess, 'Popen', start)
+    restore = Mock()
+    worker.run_isolated(
+        [after], tmp_path, {'software_name': 'photozpy-cr-preview'}, restore,
+        comparison_pairs=[(before, after)],
+    )
+    restore.assert_called_once_with(state)

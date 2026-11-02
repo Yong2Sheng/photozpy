@@ -27,6 +27,9 @@ class ImageReviewer:
 
     Moving files does not update an existing ImageFileCollection or other
     collection snapshot. Rebuild the collection after the review completes.
+    The first display connects to DS9 or starts it automatically. Subsequent
+    images reuse that instance; Retry rechecks readiness after a load failure.
+    DS9 remains open when the controls are closed.
 
     Parameters
     ----------
@@ -73,6 +76,8 @@ class ImageReviewer:
         if self._isolated and not standard_adapter:
             raise TypeError("Custom adapters require isolated=False.")
         self.adapter = adapter
+        self._ds9_ready: bool = False
+        self._display_verified: bool = False
 
         self.index: int = 0
         self.rejected: list[Path] = []
@@ -237,8 +242,17 @@ class ImageReviewer:
         )
 
         try:
+            if not self._ds9_ready:
+                self.adapter.ensure_running()
+                self._ds9_ready = True
+                self._display_verified = False
             self.adapter.load_fits(path)
+            if not self._display_verified:
+                self.adapter.verify_image_loaded()
+                self._display_verified = True
         except Exception as error:
+            self._ds9_ready = False
+            self._display_verified = False
             self._debug(f"show_current: load failed: {error}")
             self.good_button.config(state=tk.DISABLED)
             self.reject_button.config(state=tk.DISABLED)

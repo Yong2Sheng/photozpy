@@ -1,5 +1,8 @@
 # Standard library
+from collections.abc import Iterable, Mapping
+import os
 from pathlib import Path
+import tempfile
 from typing import Any, Literal
 
 # Third-party
@@ -9,6 +12,8 @@ from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.nddata import CCDData
 from astropy.stats import sigma_clip
+from astropy.time import Time
+from ccdproc import ImageFileCollection
 from astropy.visualization import (
     AsinhStretch,
     ImageNormalize,
@@ -24,6 +29,80 @@ from numpy.typing import ArrayLike
 
 
 ImageStretchName = Literal["asinh", "sqrt", "log", "linear"]
+
+
+def update_fits_header(
+    fits_path: str | Path,
+    header_values: Mapping[str, Any],
+    *,
+    output_path: str | Path | None = None,
+    hdu_index: int | str | tuple[str, int] = 0,
+    overwrite: bool = False,
+    remove_keys: Iterable[str] = (),
+) -> Path:
+    """Write header cards in one HDU while preserving the complete FITS file.
+
+    Values may be ordinary FITS values or ``(value, comment)`` tuples.
+    remove_keys are deleted from the selected header before applying new values;
+    missing keys are ignored. Use this for replacing an obsolete WCS completely.
+    An empty mapping copies the complete file without changing header cards.
+    No time conversion, filter mapping, or image-data calculation is performed.
+    Only the selected HDU's header is edited; all other HDUs are retained.
+    If the input contains checksum cards, checksums are regenerated for every
+    output HDU so header edits cannot leave stale integrity metadata.
+
+    If output_path is None, replace the input file (requires overwrite=True).
+    Otherwise write a separate output file. The complete output is first
+    written to a temporary file in the destination directory, so a failed FITS
+    serialization does not leave a partially overwritten input. Existing output
+    files are replaced only when overwrite=True. Return the written path.
+    """
+    source = Path(fits_path).expanduser().resolve()
+    destination = (
+        source if output_path is None
+        else Path(output_path).expanduser().resolve()
+    )
+    if not source.is_file():
+        raise FileNotFoundError(source)
+    if destination.exists() and not overwrite:
+        raise FileExistsError(destination)
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+    try:
+        with fits.open(
+            source, mode="readonly", memmap=False, do_not_scale_image_data=True
+        ) as hdul:
+            for key in remove_keys:
+                hdul[hdu_index].header.remove(key, ignore_missing=True, remove_all=True)
+            for key, value in header_values.items():
+                hdul[hdu_index].header[key] = value
+            # Preserve the output suffix so Astropy retains compressed formats.
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{destination.name}.",
+                suffix="".join(destination.suffixes),
+                dir=destination.parent,
+            )
+            os.close(descriptor)
+            temporary_path = Path(temporary_name)
+            checksums_present = any(
+                'CHECKSUM' in hdu.header or 'DATASUM' in hdu.header
+                for hdu in hdul
+            )
+            hdul.writeto(
+                temporary_path, overwrite=True, checksum=checksums_present
+            )
+
+        if overwrite:
+            os.replace(temporary_path, destination)
+        else:
+            # A hard link publishes the complete file without overwriting an
+            # output that another process may have created since our check.
+            os.link(temporary_path, destination)
+        return destination
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def has_wcs(
@@ -421,3 +500,212 @@ def plot_image(
         return None
 
     return fig, ax
+
+
+# Header operations migrated from HeaderManipulation. Collection-based
+# signatures and existing scientific behavior are retained in this migration.
+def check_headers(image_collection, **headers_values):
+    """
+    Check if the headers and their values are consistent in the image collection
+
+    Parameters
+    ----------
+    image_collection: ccdproc.ImageFileCollection; the collection of images
+    headers_values: dict; the header names and corresponding values. The values should be in tuple.
+                          If there is only one value for the header, use (value,)
+
+    Returns
+    -------
+    final : boolean; True or False
+    """
+
+    results = []
+    for header, value in headers_values.items():
+        # get the header values from the image collection
+        values_in_collection = image_collection.values(header)
+        # remove the repeated values to speed up
+        values_in_collection = [*set(values_in_collection)]
+
+        result = []
+        for val in value:
+            if val in values_in_collection:
+                result += [True]
+            else:
+                result += [False]
+
+        results += [all(result)]
+
+    final = all(results)
+
+    return final
+
+
+def correct_headers(input_collection, save_location="",
+                    overwrite=True, time_transformation=False, **headers_values):
+    """
+    Change or add headers and values.
+
+    Parameters
+    ----------
+    input_collection: ccdproc.ImageFileCollection; the collection of images.
+    save_location: str; the location to save the new files.
+    overwrite: boolean; overwrite the files or not if the files already exist.
+    time_transformation: boolean; transformation the time format from UT1 to MJD and add a MJD-OBS header to meet the fits standard
+    headers_values: dict; the dictionary of the headers and their values.
+
+    Returns
+    ------
+    new_collection: ccdproc.ImageFileCollection; The new image collection.
+    """
+
+    if not headers_values:  # python evaluate empty object to be False
+        raise ValueError(
+            "Please provide at least one header and one header values!")
+
+    # create the save_location if not exist
+    if save_location != "":
+        Path(save_location).mkdir(parents=False, exist_ok=True)
+
+    for hdu in input_collection.hdus(
+            overwrite=overwrite, save_location=save_location):
+        for key, value in headers_values.items():
+            hdu.header[key] = value
+            if time_transformation:
+                date_time = Time(
+                    hdu.header["DATE-OBS"], format="isot", scale="ut1")
+                mjd_time = date_time.mjd
+                hdu.header["MJD-OBS"] = mjd_time
+
+    # Here I want to return a new collection of the modified files because
+    # the summary of the input image collection won't be updated by itself
+    if save_location == "":
+        new_collection = ImageFileCollection(
+            location=input_collection.location,
+            filenames=input_collection.files)
+    else:
+        new_collection = ImageFileCollection(
+            location=save_location, filenames=input_collection.files)
+
+    return new_collection
+
+
+def map_filters(name, **filter_dict):
+    """
+    Map filter names to standard filter names.
+
+    Parameters
+    ----------
+    name: the input filter name to be matched to a standard one.
+    filter_dict: customized filter mapping dictionary.
+
+    Return
+    ------
+    mapped_filter: str; the name of the mapped standard filter.
+    """
+
+    if filter_dict == {}:
+        # use the default mappers
+        mappers = {"Sloan g'2": "SDSS_g'",
+                   "Sloan r'2": "SDSS_r'",
+                   "Sloan i'2": "SDSS_i'",
+                   "Sloan z'2": "SDSS_z'",
+                   "Sloan_g'2": "SDSS_g'",
+                   "Sloan_r'2": "SDSS_r'",
+                   "Sloan_i'2": "SDSS_i'",
+                   "Sloan_z'2": "SDSS_z'",
+                   "SDSS g": "SDSS_g'",
+                   "SDSS r": "SDSS_r'",
+                   "SDSS i": "SDSS_i'",
+                   "SDSS z": "SDSS_z'",
+                   "SDSS_g": "SDSS_g'",
+                   "SDSS_r": "SDSS_r'",
+                   "SDSS_i": "SDSS_i'",
+                   "SDSS_z": "SDSS_z'",
+                   "BESSEL B": "Bessel_B",
+                   "BESSEL V": "Bessel_V",
+                   "BESSEL R": "Bessel_R",
+                   "BESSEL I": "Bessel_I",
+                   "B": "ubb",
+                   "UVM2": "um2",
+                   "U": "uuu",
+                   "V": "uvv",
+                   "UVW1": "uw1",
+                   "UVW2": "uw2"}
+    else:
+        mappers = filter_dict
+
+    mapped_filters = [
+        value for key,
+        value in mappers.items() if key == name]
+    # remove the duplicated filter names
+    mapped_filters = [*set(mapped_filters)]
+
+    if len(mapped_filters) == 0:
+        raise ValueError(
+            f"Mapping the input filter failed! No mapped filter {name} was found!")
+    elif len(mapped_filters) > 1:
+        raise ValueError(
+            f"Mapping the input filter failed! More than two mapped filters are found: {mapped_filters}")
+    else:
+        return mapped_filters[0]
+
+
+def get_header_values(image_collection, header):
+    """
+    Get the header values from an image collection. The repeated values will be removed.
+
+    Parameters
+    ----------
+    image_collection
+    headers
+
+    Returns
+    -------
+    header_values: list
+    """
+
+    return image_collection.values(header, unique=True)
+
+
+def edit_headers_with_fitsio(image_collection, save_location="",
+                             additional_name=None, overwrite=True, **headers_values, ):
+    """
+    This edits the header of multi-extension fits files since the iteration of ImageCollection doesn't work on
+    multi-extension fits files.
+
+    Parameters
+    ----------
+    image_collection
+    save_location
+    headers_values: dict; the dictionary of the headers you want to add/edit
+    additional_name: str; the additional name appending to the original file name
+
+    Returns
+    -------
+    None
+    """
+
+    file_paths = image_collection.files_filtered(include_path=True)
+
+    for file_path in file_paths:
+
+        file_path = Path(file_path)
+        if save_location != "":
+            save_location = Path(save_location)
+            if additional_name is None:
+                save_location = save_location / file_path.name
+            else:
+                file_name = file_path.stem + "_master" + file_path.suffix
+                save_location = save_location / file_name
+        else:
+            if additional_name is None:
+                save_location = file_path
+            else:
+                file_name = file_path.stem + "_master" + file_path.suffix
+                save_location = file_path.parent / file_name
+
+        hdul = fits.open(file_path)
+        for key, value in headers_values.items():
+            hdul[0].header[key] = value
+        hdul.writeto(save_location, overwrite=overwrite)
+        hdul.close()

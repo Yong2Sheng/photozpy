@@ -19,6 +19,9 @@ def run_isolated(
     rejected_dir: Path,
     adapter_config: dict | None,
     restore_state: Callable[[dict], None],
+    *,
+    comparison_pairs: list[tuple[Path, Path]] | None = None,
+    preview_only: bool = False,
 ) -> None:
     """Wait for a GUI child and restore decisions, including on failure."""
     with tempfile.TemporaryDirectory(prefix="photozpy-review-") as directory:
@@ -30,6 +33,11 @@ def run_isolated(
             "images": [str(path) for path in images],
             "rejected_dir": str(rejected_dir),
             "adapter": adapter_config,
+            "preview_only": preview_only,
+            "comparison_pairs": (
+                None if comparison_pairs is None else
+                [[str(before), str(after)] for before, after in comparison_pairs]
+            ),
         }), encoding="utf-8")
         environment = os.environ.copy()
         # Use the same checkout as the caller, including editable installs.
@@ -76,10 +84,21 @@ def main() -> None:
     request, state = map(Path, sys.argv[1:])
     config = json.loads(request.read_text(encoding="utf-8"))
     adapter = DS9Adapter(**(config["adapter"] or {}))
-    reviewer = ImageReviewer(
-        config["images"], config["rejected_dir"],
-        adapter=adapter, isolated=False,
-    )
+    if config.get('comparison_pairs') is not None:
+        from .comparison_reviewer import ImageComparisonReviewer
+
+        reviewer = ImageComparisonReviewer(
+            config['comparison_pairs'], adapter=adapter, isolated=False,
+        )
+    elif config.get('preview_only'):
+        from .image_previewer import ImagePreviewer
+
+        reviewer = ImagePreviewer(config['images'], adapter=adapter, isolated=False)
+    else:
+        reviewer = ImageReviewer(
+            config["images"], config["rejected_dir"],
+            adapter=adapter, isolated=False,
+        )
     reviewer._state_path = state
     reviewer.run()
 
