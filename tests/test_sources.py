@@ -3,6 +3,8 @@
 from dataclasses import replace
 
 from astropy.coordinates import SkyCoord
+import astropy.units as u
+import numpy as np
 import pytest
 
 from photozpy.sources import (
@@ -60,6 +62,26 @@ def test_metadata_preserved_and_all_results_initially_undefined(infos):
         assert single.source_info is info
         for kind in ("instrumental", "reference", "calibrated"):
             assert single.get_magnitudes(kind=kind) is None
+
+
+def test_combine_preserves_shared_slots_and_both_source_roles(infos):
+    science_info, standard_info = infos
+    science = Sources(science_info)
+    standard = Sources(standard_info)
+    reference = measurement("AB")
+    standard.set_magnitudes(kind="reference", magnitudes=reference)
+    combined = Sources.combine(standard, science, standard[:])
+    assert combined.source_names == (standard_info.source_name, science_info.source_name)
+    assert combined[0].get_magnitudes(kind="reference") is reference
+    result = measurement("instrumental")
+    combined[1].set_magnitudes(kind="instrumental", magnitudes=result)
+    assert science.get_magnitudes(kind="instrumental") is result
+    assert standard.get_magnitudes(kind="reference") is reference
+    with pytest.raises(ValueError, match="Conflicting independent"):
+        Sources.combine(standard, Sources(standard_info))
+    with pytest.raises(TypeError):
+        Sources.combine(standard, [science_info])
+    assert len(Sources.combine()) == 0
 
 
 def test_index_and_slice_keep_python_order_and_bounds(infos):
@@ -183,3 +205,34 @@ def test_public_exports():
     from photozpy import Sources as PublicSources
 
     assert PublicSources is Sources
+
+
+@pytest.mark.parametrize("kind", ["instrumental", "reference", "calibrated"])
+def test_show_magnitudes_groups_sources_without_changing_results(infos, capsys, kind):
+    sources = Sources(*infos)
+    result = measurement("instrumental" if kind == "instrumental" else "AB")
+    result.qtable["error"][1] = -99 * u.mag
+    before = result.qtable.copy(copy_data=True)
+    sources[0].set_magnitudes(kind=kind, magnitudes=result)
+
+    assert sources.show_magnitudes(kind=kind) is None
+    output = capsys.readouterr().out
+    assert output.index(infos[0].source_name) < output.index(infos[1].source_name)
+    assert "Field: science_field" in output
+    assert "Field: standard_field" in output
+    assert f"Magnitude system: {result.magnitude_system}" in output
+    assert "Magnitude (mag)" in output and "Significance" in output
+    assert "18.2000" in output and "UL (-99)" in output and "--" in output
+    assert f"No {kind} magnitudes available." in output
+    assert sources[0].get_magnitudes(kind=kind) is result
+    assert sources[1].get_magnitudes(kind=kind) is None
+    for column in ("magnitude", "error", "significance"):
+        np.testing.assert_array_equal(result.qtable[column], before[column])
+
+
+def test_show_magnitudes_handles_empty_and_validates_kind_before_display(infos, capsys):
+    Sources().show_magnitudes()
+    assert "No sources to display." in capsys.readouterr().out
+    with pytest.raises(ValueError, match="kind"):
+        Sources(*infos).show_magnitudes(kind="invalid")
+    assert capsys.readouterr().out == ""

@@ -216,6 +216,10 @@ class ImageReviewer:
 
         return self.images[self.index]
 
+    def _load_image(self, path: Path) -> None:
+        """Load the active queue entry using the default display policy."""
+        self.adapter.load_fits(path)
+
     def show_current(self) -> None:
         """Display the current image in DS9 and update button states.
 
@@ -246,7 +250,7 @@ class ImageReviewer:
                 self.adapter.ensure_running()
                 self._ds9_ready = True
                 self._display_verified = False
-            self.adapter.load_fits(path)
+            self._load_image(path)
             if not self._display_verified:
                 self.adapter.verify_image_loaded()
                 self._display_verified = True

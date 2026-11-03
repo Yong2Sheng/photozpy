@@ -22,6 +22,7 @@ def run_isolated(
     *,
     comparison_pairs: list[tuple[Path, Path]] | None = None,
     preview_only: bool = False,
+    region_sessions: list[dict[str, str]] | None = None,
 ) -> None:
     """Wait for a GUI child and restore decisions, including on failure."""
     with tempfile.TemporaryDirectory(prefix="photozpy-review-") as directory:
@@ -34,6 +35,7 @@ def run_isolated(
             "rejected_dir": str(rejected_dir),
             "adapter": adapter_config,
             "preview_only": preview_only,
+            "region_sessions": region_sessions,
             "comparison_pairs": (
                 None if comparison_pairs is None else
                 [[str(before), str(after)] for before, after in comparison_pairs]
@@ -84,7 +86,16 @@ def main() -> None:
     request, state = map(Path, sys.argv[1:])
     config = json.loads(request.read_text(encoding="utf-8"))
     adapter = DS9Adapter(**(config["adapter"] or {}))
-    if config.get('comparison_pairs') is not None:
+    if config.get('region_sessions') is not None:
+        from .region_reviewer import RegionReviewer
+        from ..photometry.regions import PhotometryRegions
+
+        sessions = [
+            PhotometryRegions.load(item["root"], item["manifest"])
+            for item in config["region_sessions"]
+        ]
+        reviewer = RegionReviewer(sessions, adapter=adapter, isolated=False)
+    elif config.get('comparison_pairs') is not None:
         from .comparison_reviewer import ImageComparisonReviewer
 
         reviewer = ImageComparisonReviewer(
