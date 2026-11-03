@@ -5,5 +5,6 @@ do not import their unrefactored dependencies during FWHM measurement.
 """
 
 from .fwhm import FWHM
+from .regions import PhotometryRegions, PhotometryRegionCollection
 
-__all__ = ["FWHM"]
+__all__ = ["FWHM", "PhotometryRegions", "PhotometryRegionCollection"]

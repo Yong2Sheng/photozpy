@@ -59,6 +59,54 @@ def test_adapter_discovers_commands_during_initialization(
     find_commands.assert_called_once_with()
 
 
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_add_regions_uses_stdin_and_reports_xpa_failure(ds9_adapter, monkeypatch, returncode):
+    run = Mock(return_value=subprocess.CompletedProcess([], returncode, "", "XPA failed"))
+    monkeypatch.setattr(adapter_module.subprocess, "run", run)
+    region_text = "icrs\npoint(163,-5) # point=cross\n"
+    if returncode:
+        with pytest.raises(DS9CommunicationError, match="XPA failed"):
+            ds9_adapter.add_regions(region_text)
+    else:
+        ds9_adapter.add_regions(region_text)
+    run.assert_called_once_with(
+        [ds9_adapter.commands.xpaset, ds9_adapter.software_name, "regions"],
+        input=region_text, check=False, text=True, capture_output=True,
+    )
+
+
+@pytest.mark.parametrize("zoom", ["4", "4 2"])
+def test_preserve_view_captures_before_load_and_restores_zoom_pan(ds9_adapter, monkeypatch, zoom):
+    events = []
+
+    def get(*args):
+        events.append(("get", *args))
+        return zoom if args == ("zoom",) else "123.25 456.5"
+
+    monkeypatch.setattr(ds9_adapter, "get", get)
+    monkeypatch.setattr(ds9_adapter, "set", lambda *args: events.append(("set", *args)))
+    fit = Mock()
+    monkeypatch.setattr(ds9_adapter, "zoom_to_fit", fit)
+    ds9_adapter.load_fits("registered.fits", preserve_view=True)
+    assert events[:2] == [("get", "zoom"), ("get", "pan", "image")]
+    assert events[2][1] == "fits"
+    assert events[-2:] == [
+        ("set", "zoom", "to", *zoom.split()),
+        ("set", "pan", "to", "123.25", "456.5", "image"),
+    ]
+    fit.assert_not_called()
+
+
+@pytest.mark.parametrize("zoom,pan", [("nan", "1 2"), ("0", "1 2"), ("2", "XPA error"), ("2", "1")])
+def test_invalid_view_does_not_replace_current_image(ds9_adapter, monkeypatch, zoom, pan):
+    monkeypatch.setattr(ds9_adapter, "get", Mock(side_effect=[zoom, pan]))
+    send = Mock()
+    monkeypatch.setattr(ds9_adapter, "set", send)
+    with pytest.raises(DS9CommunicationError, match="capture DS9 view"):
+        ds9_adapter.load_fits("registered.fits", preserve_view=True)
+    send.assert_not_called()
+
+
 def test_ensure_running_reuses_existing_target(ds9_adapter, monkeypatch):
     monkeypatch.setattr(ds9_adapter, 'get', Mock(return_value='8.6'))
     start = Mock()

@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
-from typing import Literal, Self, TypeAlias
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, Self, TypeAlias
 
 from .filter_magnitude import FilterMagnitude
 from .source_info import SourceInfo, SourceRole, VALID_SOURCE_ROLES
+
+if TYPE_CHECKING:
+    from matplotlib.figure import Figure
+    from pandas import DataFrame
+
+    from ._zero_points import _ZeroPointStatistics
 
 
 MagnitudeKind: TypeAlias = Literal["instrumental", "reference", "calibrated"]
@@ -36,13 +43,14 @@ class Sources:
     through either collection is visible through the other. Metadata and
     FilterMagnitude objects are stored by reference, without copying.
 
-    This class stores results only. It does not perform photometry, magnitude
-    system conversion, zero-point estimation, or calibration, and does not
-    implement the legacy Sources API.
+    Photometry is performed separately. Explicit zero-point, diagnostic plotting,
+    and target-calibration methods operate on the stored results, without
+    converting magnitude systems. Setting a result alone never calibrates it.
     """
 
     def __init__(self, *source_infos: SourceInfo) -> None:
         self._source_infos = tuple(source_infos)
+        self._zero_point_statistics: _ZeroPointStatistics | None = None
         self._magnitudes: dict[
             SourceKey, dict[MagnitudeKind, FilterMagnitude | None]
         ] = {}
@@ -70,6 +78,35 @@ class Sources:
     def from_list(cls, source_infos: Iterable[SourceInfo]) -> Self:
         """Create a collection from an iterable of source definitions."""
         return cls(*source_infos)
+
+    @classmethod
+    def combine(cls, *collections: Sources) -> Self:
+        """Combine collections while sharing their existing measurement records.
+
+        Preserve input/source order and all three result slots. Updating the
+        combined view updates the original collections, just like a selection.
+        Repeated selections of the same shared record are deduplicated. Separate
+        records claiming the same (field_name, source_name) raise ValueError
+        instead of arbitrarily choosing one owner's results. Source roles may
+        coexist within a field; role is not part of the source identity.
+        """
+        infos: list[SourceInfo] = []
+        records: dict[SourceKey, dict[MagnitudeKind, FilterMagnitude | None]] = {}
+        for collection in collections:
+            if not isinstance(collection, Sources):
+                raise TypeError("Each collection must be a Sources object.")
+            for info in collection.source_infos:
+                key = cls._key(info)
+                record = collection._magnitudes[key]
+                if key in records:
+                    if records[key] is not record:
+                        raise ValueError(f"Conflicting independent source records: {key!r}.")
+                    continue
+                infos.append(info)
+                records[key] = record
+        combined = cls(*infos)
+        combined._magnitudes = records
+        return combined
 
     @property
     def source_infos(self) -> tuple[SourceInfo, ...]:
@@ -250,3 +287,152 @@ class Sources:
                     f"is incompatible with kind={kind!r}."
                 )
         self._magnitudes[self._key(info)][kind] = magnitudes
+
+    def show_magnitudes(self, *, kind: MagnitudeKind = "calibrated") -> None:
+        """Print one compact magnitude summary per source in collection order.
+
+        Parameters
+        ----------
+        kind : {"instrumental", "reference", "calibrated"}, optional
+            Result slot to display. Default is ``"calibrated"``.
+
+        Notes
+        -----
+        Show the source name and field once, followed by the magnitude-system
+        label and FilterMagnitude.to_table's filter, magnitude, error and
+        significance columns. Missing values remain ``--`` and upper-limit
+        errors retain the existing ``UL (-99)`` display. An undefined result
+        is reported explicitly without creating a placeholder measurement.
+
+        This method only formats existing results. It does not calculate,
+        calibrate, modify or save measurements. Use selections such as
+        ``by_role("science")`` before calling to restrict the displayed sources.
+        """
+        self._check_kind(kind)
+        summaries: list[str] = []
+
+        for info in self._source_infos:
+            magnitudes = self._magnitudes[self._key(info)][kind]
+            heading = (
+                f"{info.source_name}\n"
+                f"Field: {info.observation_field.field_name}"
+            )
+            table = (
+                magnitudes.to_table() if magnitudes is not None
+                else f"No {kind} magnitudes available."
+            )
+            summaries.append(f"{heading}\n{table}")
+
+        print("\n\n".join(summaries) if summaries else "No sources to display.")
+
+    def calculate_zero_points(
+        self, sigma: float = 3.0, *, min_significance: float = 3.0
+    ) -> DataFrame:
+        """Calculate and store per-filter standard-star zero points.
+
+        Use standard-role sources with finite reference/instrumental magnitudes,
+        no instrumental upper-limit flag, and detection significance at least
+        ``min_significance``. Preserve the legacy method: reference minus
+        instrumental magnitude, one pass of scipy.stats.zscore filtering at
+        ``sigma``, then an unweighted arithmetic mean. A singleton or constant
+        sample is retained rather than rejected by undefined z-scores.
+
+        Return an independent pandas DataFrame with per-filter ``zero_point``
+        and population ``scatter`` (both numerical magnitudes), sample counts,
+        and magnitude-system labels. Scatter describes retained stars; it is
+        not propagated as a zero-point uncertainty. Neither catalog errors nor
+        instrumental errors weight the mean. No exposure-time correction,
+        color transformation, extinction or aperture correction is applied.
+
+        All standards must share one Telescope instance and reference magnitude
+        system. Science-role sources in a mixed collection are ignored. A filter
+        without eligible standards has NaN results; no eligible filter raises
+        ValueError. Source magnitude slots are never changed by this method.
+        """
+        from ._zero_points import calculate_zero_points
+
+        result = calculate_zero_points(self, sigma, min_significance)
+        self._zero_point_statistics = result
+        return result.summary.copy(deep=True)
+
+    def _get_zero_point_statistics(self) -> _ZeroPointStatistics:
+        """Require an existing result that still matches the standard inputs."""
+        from ._zero_points import standard_signature
+
+        result = self._zero_point_statistics
+        if result is None:
+            raise RuntimeError("Call calculate_zero_points() first.")
+        if result.signature != standard_signature(self):
+            raise RuntimeError(
+                "Standard-star measurements changed; call calculate_zero_points() again."
+            )
+        return result
+
+    @property
+    def zero_points(self) -> DataFrame:
+        """Return a copy of the current per-filter summary; values are in mag."""
+        return self._get_zero_point_statistics().summary.copy(deep=True)
+
+    @property
+    def zero_point_details(self) -> DataFrame:
+        """Return per-star/filter magnitudes, zero points and selection reasons.
+
+        Numeric magnitude columns are in mag. The returned DataFrame is a
+        defensive copy and includes excluded measurements for inspection.
+        """
+        return self._get_zero_point_statistics().details.copy(deep=True)
+
+    def plot_zero_point_statistics(
+        self,
+        *,
+        reference_offset: float = 0.1,
+        save_path: str | Path | None = None,
+    ) -> Figure:
+        """Show one panel per measured filter using the stored zero points.
+
+        Plot all finite individual zero points, with retained points in blue,
+        rejected points as orange crosses, and the retained average in green.
+        Each panel reports retained/rejected counts and, when present, the
+        number of unavailable offsets that have no finite value to plot.
+        Red lines at average +/- ``reference_offset`` mag are visual guides,
+        not clipping thresholds or uncertainty bounds. Return the Figure for
+        further inspection. Save only when ``save_path`` is explicitly supplied.
+        Call calculate_zero_points first; modified standard inputs require a
+        fresh calculation. Plotting never recalculates or changes the result.
+        """
+        from ._zero_points import plot_zero_point_statistics
+
+        return plot_zero_point_statistics(
+            self._get_zero_point_statistics(), reference_offset, save_path
+        )
+
+    def calibrate_targets(self, *, standard_sources: Sources) -> DataFrame:
+        """Apply standard-star zero points to all science sources in this view.
+
+        Reuse the supplied collection's inspected zero points. If none have
+        been calculated, calculate them with the default thresholds first.
+        Changed standard inputs require an explicit recalculation. Standards
+        may share the science observation field or occupy a separate field.
+
+        Add each filter's zero point to the original instrumental magnitude
+        and write a new FilterMagnitude to the calibrated slot. Preserve the
+        instrumental errors and significance exactly, including the -99 mag
+        upper-limit error flag. Catalog errors and zero-point uncertainty are
+        deliberately not propagated. The output system follows the reference
+        magnitudes; there is no AB/Vega conversion.
+
+        Return a pandas DataFrame of all science source/filter results, with
+        magnitude/error values in mag. Missing instrumental values remain NaN;
+        a source without instrumental results has no calibrated result. A
+        finite instrumental value without a usable zero point, or a Telescope
+        mismatch, raises before any calibrated slot is updated. Repeated calls
+        always use instrumental magnitudes, never already calibrated values.
+        """
+        from ._zero_points import calibrate_targets
+
+        if not isinstance(standard_sources, Sources):
+            raise TypeError("standard_sources must be a Sources object.")
+        if standard_sources._zero_point_statistics is None:
+            standard_sources.calculate_zero_points()
+        result = standard_sources._get_zero_point_statistics()
+        return calibrate_targets(self, result)

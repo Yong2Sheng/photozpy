@@ -7,6 +7,7 @@ without constructing subprocess calls directly.
 """
 
 from pathlib import Path
+import math
 from shutil import which
 import subprocess
 import sys
@@ -153,6 +154,7 @@ class DS9Adapter:
         *,
         configure_display: bool = True,
         hdu: str | int | None = None,
+        preserve_view: bool = False,
     ) -> None:
         """Load a FITS image without repeatedly overriding manual scale choices.
 
@@ -176,15 +178,39 @@ class DS9Adapter:
         hdu : str, int, or None, optional
             Select a FITS extension by name or index, e.g. 'CMASK'. None uses
             the normal DS9 default image selection.
+        preserve_view : bool, optional
+            Default False retains zoom-to-fit. True captures the active image's
+            zoom and image-coordinate pan before loading, then restores both.
+            Requires a loaded image and configure_display=True. Intended for
+            navigating registered images of the same target or field.
 
         Paths are resolved and quoted before being sent to DS9 because DS9's
         XPA parser treats spaces in unquoted paths as separate command tokens.
-        Zoom-to-fit is still applied to every image. A failed load does not
+        Zoom-to-fit is applied unless preserve_view=True. A failed load does not
         mark initialization complete, allowing Retry to initialize the display.
         """
 
         if not configure_display and (scale_mode is not None or scale_function is not None):
             raise ValueError('Explicit scale settings require configure_display=True.')
+        if preserve_view and not configure_display:
+            raise ValueError('preserve_view requires configure_display=True.')
+
+        view: tuple[list[str], list[str]] | None = None
+        if preserve_view:
+            zoom = self.get("zoom").split()
+            pan = self.get("pan", "image").split()
+            try:
+                if len(zoom) not in (1, 2) or len(pan) != 2:
+                    raise ValueError("Unexpected zoom/pan dimensions.")
+                zoom_values = [float(value) for value in zoom]
+                pan_values = [float(value) for value in pan]
+                if not all(math.isfinite(value) for value in zoom_values + pan_values):
+                    raise ValueError("Non-finite zoom/pan values.")
+                if any(value <= 0 for value in zoom_values):
+                    raise ValueError("Zoom must be positive.")
+            except ValueError as error:
+                raise DS9CommunicationError(f"Cannot capture DS9 view: {error}") from error
+            view = (zoom, pan)
 
         filename = _quote_path(path)
         if hdu is not None:
@@ -211,7 +237,12 @@ class DS9Adapter:
                 "asinh" if scale_function is None else scale_function
             )
 
-        self.zoom_to_fit()
+        if view is None:
+            self.zoom_to_fit()
+        else:
+            zoom, pan = view
+            self.set("zoom", "to", *zoom)
+            self.set("pan", "to", *pan, "image")
         self._has_loaded_image = True
 
     def set_zscale(self) -> None:
@@ -229,6 +260,22 @@ class DS9Adapter:
 
         region_path = Path(path).expanduser().resolve()
         self.set("region", "load", _quote_path(region_path))
+
+    def add_regions(self, region_text: str) -> None:
+        """Send DS9-format regions through XPA stdin, without a temporary file.
+
+        The caller supplies the coordinate-system declaration and region
+        properties. Existing regions remain until clear_regions is called.
+        """
+        result = subprocess.run(
+            [self.commands.xpaset, self.software_name, "regions"],
+            input=region_text,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise DS9CommunicationError(result.stderr.strip())
 
     def save_region(self, path: str | Path) -> None:
         """Save the active DS9 regions to a region file."""

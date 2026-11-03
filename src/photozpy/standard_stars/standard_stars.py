@@ -1,8 +1,9 @@
 # Standard library
+from collections.abc import Mapping
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 # Third-party: NumPy / pandas
 import numpy as np
@@ -30,6 +31,10 @@ from astropy_healpix import HEALPix
 
 # Local imports
 from ..fits_utilities import get_fov_center_skycoord, get_wcs
+from ..sources import FilterMagnitude, ObservationField, SourceInfo, Sources
+from ..telescope import Telescope
+from ..telescope.filterset import UnknownFilterAliasError
+from ..interactive_ds9.adapter import DS9Adapter
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -141,6 +146,314 @@ class StandardStarCatalog:
         # store some useful strings
         self.table_node_path: str = self.metadata.table_node_path
         self.table_title: str = self.metadata.table_title
+        self._matched_stars: pd.DataFrame | None = None
+
+    @property
+    def matched_stars(self) -> pd.DataFrame:
+        """Return the last completed query's fully filtered candidate table.
+
+        Includes all original catalog and optional pixel-position columns, in
+        query row order with the original index. Source IDs are decoded from
+        UTF-8 bytes for notebook display. Magnitudes and errors are unchanged.
+        Both find_standard_stars and find_standard_sources populate this table;
+        to_sources alone does not perform a query or replace it.
+
+        A defensive copy prevents notebook edits from changing the stored query
+        result. An empty successful query returns an empty DataFrame with its
+        columns intact. Before the first successful query, raises RuntimeError;
+        a failed query leaves the previous snapshot available.
+        """
+        if self._matched_stars is None:
+            raise RuntimeError("No matched-star table is available; run a catalog query first.")
+        stars = self._matched_stars.copy(deep=True)
+        if "id_name" in stars:
+            stars["id_name"] = stars["id_name"].map(
+                lambda value: value.decode("utf-8") if isinstance(value, bytes) else value
+            )
+        return stars
+
+    @staticmethod
+    def resolve_magnitude_columns(
+        columns: tuple[str, ...],
+        telescope: Telescope,
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Resolve catalog columns through Telescope's existing filter aliases.
+
+        Return magnitude and uncertainty mappings in telescope filter order.
+        Uncertainty columns use the compiled catalogs' ``<magnitude>_err``
+        convention. Unrecognized columns are ignored; ambiguous aliases and
+        catalogs with no matching filters raise ValueError. No approximate
+        string matching or photometric-system transformation is performed.
+        """
+        matched: dict[str, str] = {}
+        for column in columns:
+            try:
+                canonical = telescope.resolve_filter_alias(column)
+            except UnknownFilterAliasError:
+                continue
+            if canonical in matched:
+                raise ValueError(
+                    f"Multiple catalog columns match {canonical!r}: "
+                    f"{matched[canonical]!r}, {column!r}. "
+                    "Provide an explicit magnitude_columns override."
+                )
+            matched[canonical] = column
+        if not matched:
+            raise ValueError("No catalog magnitude columns match the telescope filters.")
+        magnitudes = {
+            name: matched[name] for name in telescope.filters() if name in matched
+        }
+        errors = {
+            name: column + "_err"
+            for name, column in magnitudes.items() if column + "_err" in columns
+        }
+        return magnitudes, errors
+
+    def to_sources(
+        self,
+        stars: pd.DataFrame,
+        *,
+        observation_field: ObservationField,
+        magnitude_columns: Mapping[str, str] | None = None,
+        magnitude_system: Literal["AB", "Vega"],
+        error_columns: Mapping[str, str] | None = None,
+        coordinate_frame: str = "icrs",
+    ) -> Sources:
+        """Attach catalog reference magnitudes to individual standard sources.
+
+        Parameters
+        ----------
+        stars : pandas.DataFrame
+            Selected catalog rows, normally returned by ``find_standard_stars``.
+            Must contain ``id_name``, ``ra``, and ``dec``. Byte-string source
+            identifiers are decoded as UTF-8; row order is preserved.
+        observation_field : ObservationField
+            Shared field definition. Its Telescope instance is reused by every
+            reference FilterMagnitude.
+        magnitude_columns : Mapping[str, str] or None, optional
+            Telescope filter names or aliases mapped to catalog magnitude columns.
+            By default, resolve catalog columns through Telescope aliases and
+            discover corresponding _err columns. An explicit mapping overrides
+            discovery. At least one filter is required; aliases must be unique.
+        magnitude_system : {"AB", "Vega"}
+            Explicit system of the selected columns. Catalogs may contain mixed
+            systems, so this is not inferred from table-level metadata.
+        error_columns : Mapping[str, str] or None, optional
+            Filter names or aliases mapped to catalog uncertainty columns. Only
+            filters in magnitude_columns may be supplied. Missing errors remain
+            NaN; no uncertainties are estimated here.
+        coordinate_frame : str, optional
+            Frame of the catalog RA/Dec, default ICRS as in the existing catalog
+            footprint query. Angular units come from catalog metadata. No frame
+            is inferred from the observed image's WCS.
+
+        Returns
+        -------
+        Sources
+            One SourceInfo per row, with reference magnitudes attached. Both
+            instrumental and calibrated slots remain None. Empty input returns
+            an empty collection after column and configuration validation.
+
+        Notes
+        -----
+        This adapts the original notebook's coordinate and magnitude extraction;
+        it does not centroid, calibrate, convert photometric systems, or write
+        files. Catalog values (including NaN and any numeric sentinels) are
+        preserved. Catalog-specific missing-value rules require a separate,
+        explicit preprocessing step. Duplicate field/source identities fail
+        rather than silently replacing a star.
+        """
+        if not isinstance(stars, pd.DataFrame):
+            raise TypeError("stars must be a pandas DataFrame.")
+        if not isinstance(observation_field, ObservationField):
+            raise TypeError("observation_field must be an ObservationField.")
+        if magnitude_system not in ("AB", "Vega"):
+            raise ValueError("magnitude_system must be 'AB' or 'Vega'.")
+        if magnitude_columns is None:
+            magnitude_columns, discovered_errors = self.resolve_magnitude_columns(
+                tuple(stars.columns), observation_field.telescope,
+            )
+            if error_columns is None:
+                error_columns = discovered_errors
+        if not magnitude_columns:
+            raise ValueError("magnitude_columns must contain at least one filter.")
+
+        telescope = observation_field.telescope
+        mag_columns: dict[str, str] = {}
+        for filter_name, column in magnitude_columns.items():
+            canonical = telescope.resolve_filter_alias(filter_name)
+            if canonical in mag_columns:
+                raise ValueError(f"Duplicate canonical filter: {canonical!r}.")
+            mag_columns[canonical] = column
+
+        err_columns: dict[str, str] = {}
+        for filter_name, column in (error_columns or {}).items():
+            canonical = telescope.resolve_filter_alias(filter_name)
+            if canonical not in mag_columns:
+                raise ValueError(f"Error filter {canonical!r} has no magnitude column.")
+            if canonical in err_columns:
+                raise ValueError(f"Duplicate error filter: {canonical!r}.")
+            err_columns[canonical] = column
+
+        required = {"id_name", "ra", "dec", *mag_columns.values(), *err_columns.values()}
+        missing = required.difference(stars.columns)
+        if missing:
+            raise KeyError(f"Missing catalog columns: {sorted(missing)}")
+
+        infos: list[SourceInfo] = []
+        references: list[FilterMagnitude] = []
+        for _, row in stars.iterrows():
+            identifier = row["id_name"]
+            if isinstance(identifier, bytes):
+                name = identifier.decode("utf-8")
+            elif isinstance(identifier, str):
+                name = identifier
+            else:
+                raise TypeError("Catalog id_name values must be strings or bytes.")
+
+            ra, dec = float(row["ra"]), float(row["dec"])
+            if not np.all(np.isfinite([ra, dec])):
+                raise ValueError(f"Non-finite catalog coordinate for {name!r}.")
+            infos.append(SourceInfo(
+                source_name=name,
+                source_role="standard",
+                source_coordinate=SkyCoord(
+                    ra=ra, dec=dec,
+                    unit=(u.Unit(self.metadata.ra_unit), u.Unit(self.metadata.dec_unit)),
+                    frame=coordinate_frame,
+                ),
+                observation_field=observation_field,
+            ))
+            references.append(FilterMagnitude(
+                telescope=telescope,
+                filter_names=tuple(mag_columns),
+                magnitudes=[float(row[column]) for column in mag_columns.values()],
+                errors=[
+                    float(row[err_columns[name]]) if name in err_columns else np.nan
+                    for name in mag_columns
+                ],
+                significance=None,
+                magnitude_system=magnitude_system,
+            ))
+
+        sources = Sources.from_list(infos)
+        for single, reference in zip(sources, references):
+            single.set_magnitudes(kind="reference", magnitudes=reference)
+        return sources
+
+    def find_standard_sources(
+        self,
+        fits_path: str | Path,
+        *,
+        observation_field: ObservationField,
+        magnitude_columns: Mapping[str, str] | None = None,
+        magnitude_system: Literal["AB", "Vega"],
+        error_columns: Mapping[str, str] | None = None,
+        hdu_index: int = 0,
+        edge_margin_pix: float = 20.0,
+        mag_limit: float | None = None,
+    ) -> Sources:
+        """Query one field image and return standards with reference results.
+
+        Retains ``find_standard_stars`` and its original footprint, edge, and
+        optional all-selected-filters magnitude cuts. The selected FITS HDU must
+        have FIELD matching observation_field.field_name. Magnitude/error column
+        mappings and the explicit AB/Vega system follow ``to_sources``.
+        By default, columns and errors are discovered using Telescope aliases.
+        If mag_limit is supplied, it applies to every discovered magnitude
+        column, including telescope filters not present in the query image.
+
+        Pixel positions in ``self.final_stars`` are initial WCS projections,
+        not centroids. Returned sources use catalog ICRS coordinates, matching
+        the existing query. This method does not read FWHM, create regions,
+        modify an existing Sources collection, or write files.
+        """
+        if not isinstance(observation_field, ObservationField):
+            raise TypeError("observation_field must be an ObservationField.")
+        if magnitude_columns is None:
+            magnitude_columns, discovered_errors = self.resolve_magnitude_columns(
+                self.metadata.table_columns, observation_field.telescope,
+            )
+            if error_columns is None:
+                error_columns = discovered_errors
+        # Validate mappings on an empty table before querying the catalog.
+        columns = {"id_name", "ra", "dec", *magnitude_columns.values()}
+        columns.update((error_columns or {}).values())
+        self.to_sources(
+            pd.DataFrame(columns=sorted(columns)),
+            observation_field=observation_field,
+            magnitude_columns=magnitude_columns,
+            error_columns=error_columns,
+            magnitude_system=magnitude_system,
+        )
+        header = fits.getheader(fits_path, ext=hdu_index)
+        if header.get("FIELD") != observation_field.field_name:
+            raise ValueError("Image FIELD does not match observation_field.field_name.")
+
+        stars = self.find_standard_stars(
+            fits_path=fits_path,
+            hdu_index=hdu_index,
+            edge_margin_pix=edge_margin_pix,
+            add_pixel_columns=True,
+            mag_limit=mag_limit,
+            mag_columns=list(magnitude_columns.values()),
+        )
+        sources = self.to_sources(
+            stars,
+            observation_field=observation_field,
+            magnitude_columns=magnitude_columns,
+            error_columns=error_columns,
+            magnitude_system=magnitude_system,
+        )
+        self._matched_stars = stars.copy(deep=True)
+        return sources
+
+    def preview_standard_stars(
+        self,
+        fits_path: str | Path,
+        sources: Sources,
+        *,
+        adapter: DS9Adapter | None = None,
+    ) -> DS9Adapter:
+        """Inspect catalog candidates interactively in a dedicated DS9 window.
+
+        Display the primary image and label each standard's initial catalog
+        position with a blue cross. All sources must belong to the image's
+        FIELD. No centroiding, acceptance decision, or region-file write takes
+        place. DS9 remains open and this method returns immediately after load.
+
+        A supplied adapter selects an existing XPA target; otherwise use
+        photozpy-standard-preview. This target's current regions are replaced.
+        Later aperture review will record edits separately; moving these
+        inspection crosses does not update SourceInfo or reference results.
+        The legacy matplotlib plot method remains available for compatibility.
+        """
+        header = fits.getheader(fits_path, ext=0)
+        lines = ["# Region file format: DS9 version 4.1", "icrs"]
+        for info in sources.source_infos:
+            if info.source_role != "standard":
+                raise ValueError("Standard preview requires standard sources.")
+            if info.observation_field.field_name != header.get("FIELD"):
+                raise ValueError("Source field does not match image FIELD.")
+            coordinate = info.source_coordinate.icrs
+            # Labels are display-only; keep region syntax out of catalog names.
+            label = info.source_name.replace("{", "(").replace("}", ")")
+            label = label.replace("\\", " ").replace("\n", " ").replace("\r", " ")
+            lines.append(
+                f"point({coordinate.ra.deg:.10f},{coordinate.dec.deg:.10f}) "
+                f"# point=cross 15 color=blue width=2 text={{{label}}} "
+                "select=0 edit=0 move=0 delete=0"
+            )
+
+        viewer = adapter if adapter is not None else DS9Adapter(
+            software_name="photozpy-standard-preview",
+        )
+        viewer.ensure_running()
+        viewer.load_fits(fits_path, hdu=0)
+        viewer.verify_image_loaded()
+        viewer.clear_regions()
+        viewer.add_regions("\n".join(lines) + "\n")
+        return viewer
 
     def print_metadata(
         self,
@@ -710,6 +1023,9 @@ class StandardStarCatalog:
         This method is the public API for standard-star selection. The intermediate
         results are stored on the instance as ``self.stars_in_fov`` and
         ``self.final_stars`` for convenience in debugging and comparison.
+        ``matched_stars`` exposes a snapshot after all cuts, including the
+        optional magnitude limit; final_stars retains its legacy pre-limit
+        meaning. The returned DataFrame and its byte-string IDs are unchanged.
 
         The current magnitude-filter interface requires explicit catalog magnitude
         column names. In a future update, this should be replaced by a catalog-driven
@@ -735,16 +1051,19 @@ class StandardStarCatalog:
         )
 
         if mag_limit is None:
-            return self.final_stars
+            selected_stars = self.final_stars
         else:
             if mag_columns is None:
                 raise ValueError("You must provide the magnitude names.")
             else:
-                return self._filter_stars_by_mag_limit(
+                selected_stars = self._filter_stars_by_mag_limit(
                     df_star=self.final_stars,
                     mag_limit=mag_limit,
                     mag_columns=mag_columns,
                 )
+
+        self._matched_stars = selected_stars.copy(deep=True)
+        return selected_stars
 
     def plot_standard_stars_on_fits(
         self,
