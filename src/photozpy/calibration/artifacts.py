@@ -13,10 +13,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 import inspect
 import logging
-from numbers import Real
+import multiprocessing
+from numbers import Integral, Real
 import os
 from pathlib import Path
 import shutil
+import signal
 import tempfile
 from typing import Any
 
@@ -36,6 +38,22 @@ from ._calibration_io import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _initialize_cosmic_ray_worker() -> None:
+    """Save mask PNGs without opening interactive windows in spawned workers."""
+    import matplotlib
+
+    # Let the parent handle notebook/terminal interrupts and stop the whole pool.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    matplotlib.use('Agg', force=True)
+
+
+def _cosmic_ray_worker(task: tuple[Path, dict[str, Any]]) -> tuple[Path, Path, int]:
+    """Read, clean, and save one image; return only paths and its pixel count."""
+    source, options = task
+    destination = Artifacts._remove_cosmic_ray(source, **options)
+    return source, destination, int(fits.getheader(destination)['CRNPIX'])
 
 
 class Artifacts:
@@ -126,6 +144,64 @@ class Artifacts:
 
         pairs = [(before, after) for after, before in self._backup_paths.items()]
         ImageComparisonReviewer(pairs).run()
+
+    def review_in_ds9(self) -> ImageInput:
+        """Review the last cleaning batch and return the surviving selection.
+
+        Working images must follow root/analysis/image.fits. Infer each raw
+        directory from its working-image parent; no raw_dir argument is needed.
+        Originals must retain filenames, DATE-OBS, EXPTIME, and geometry.
+        Rejected originals go to root/rejected without overwriting older files.
+
+        Notes
+        -----
+        Run before registration. Keep/Reject decisions are staged in the GUI;
+        Previous undoes a decision and normal Quit applies pending rejects,
+        including when quitting early. GUI errors or interrupts apply none.
+        Reject means rejecting the original exposure for future pipeline runs.
+
+        Each rejection first retains the raw bytes and a JSON audit record,
+        then removes the root original and its known cleaned FITS, retained
+        Before FITS, and optional mask PNG. No regions or other products are
+        searched for or removed. Accepted and unvisited images stay selected.
+        Assign the returned collection to the notebook's analysis_images.
+
+        File operations are sequential, not a whole-review transaction. An I/O
+        failure may leave earlier rejections completed or derived files still
+        awaiting cleanup. image_collection and metadata exclude every original
+        already moved, including when cleanup fails; recover that collection
+        from this object if the call raises. Originals remain in rejected/.
+        """
+        from ._artifact_review import plan_rejections, retain_original
+        from ..interactive_ds9.cosmic_ray_reviewer import CosmicRayReviewer
+
+        if not self._backup_paths:
+            raise ValueError('No completed cleaning batch is available for review.')
+        plans = plan_rejections(self._backup_paths)
+        reviewer = CosmicRayReviewer([
+            (before, after) for after, before in self._backup_paths.items()
+        ])
+        rejected = reviewer.run()
+        if len(rejected) != len(set(rejected)) or any(path not in plans for path in rejected):
+            raise ValueError('Reviewer returned unknown or duplicate exposure paths.')
+        # Recheck identity and collisions after the user-paced GUI session.
+        plan_rejections({path: plans[path].before for path in rejected})
+        for after in rejected:
+            plan = plans[after]
+            survivors = rebuild(self._image_collection, exclusions={after})
+            try:
+                retain_original(plan, self._copy_backup)
+            finally:
+                # Include an interrupt immediately after the root unlink: the
+                # retained original, not successful cleanup, defines rejection.
+                if not plan.raw.exists() and plan.destination.is_file():
+                    self._image_collection = survivors
+                    self._backup_paths.pop(after)
+                    self._cosmic_ray_counts.pop(after, None)
+            for product in plan.derived:
+                product.unlink(missing_ok=True)
+            logger.info('Rejected original exposure retained at %s', plan.destination)
+        return self._image_collection
 
     @staticmethod
     def _validate_header(header: fits.Header, path: Path) -> tuple[float, float]:
@@ -308,6 +384,7 @@ class Artifacts:
         saturation_adu: float | None = None,
         backup_dir: str | Path | None = None,
         preview: bool = False,
+        workers: int = 1,
         **kwargs: Any,
     ) -> ImageInput:
         """Clean selected Light frames and return the updated working collection.
@@ -343,6 +420,13 @@ class Artifacts:
             Open a user-paced Before/After/Mask comparison in DS9 only after
             the whole batch succeeds. Default False. The notebook cell waits
             until Quit; on macOS the Tk controls run in a separate process.
+        workers : int, optional
+            Positive integer process count. Default 1 retains serial processing.
+            Values above 1 use a local spawn pool, capped at the selected image
+            count. Try 2 or 4; CPUs are never selected automatically. Workers
+            read their own files and use noninteractive mask plotting. Use
+            scalar CCDProc options for multiprocessing; array options require
+            workers=1 to avoid copying image-sized arrays between processes.
         **kwargs
             Original CCDProc L.A.Cosmic options, e.g. sigclip, objlim, niter,
             retaining library defaults when omitted. Prefer saturation_adu for
@@ -363,6 +447,12 @@ class Artifacts:
         earlier outputs written. Run on a representative subset and inspect the
         mask before cleaning the full night, especially for undersampled stars.
         """
+        if isinstance(workers, bool) or not isinstance(workers, Integral) or workers < 1:
+            raise ValueError('workers must be a positive integer.')
+        if workers > 1 and any(
+            value is not None and not np.isscalar(value) for value in kwargs.values()
+        ):
+            raise ValueError('Non-scalar CCDProc options require workers=1.')
         Artifacts._validate_kwargs(kwargs, saturation_adu)
         refresh(self._image_collection)
         criteria: dict[str, object] = {
@@ -418,15 +508,45 @@ class Artifacts:
 
         replacements: dict[Path, Path] = {}
         counts: dict[Path, int] = {}
-        with tqdm(selected, desc='Cosmic-ray removal', unit='image') as progress:
-            for path in progress:
-                progress.set_postfix_str(path.name)
-                destination = self._remove_cosmic_ray(
-                    path, plot_mask=plot_mask, save_location=save_location,
-                    overwrite=replace, saturation_adu=saturation_adu, **kwargs,
+        options: dict[str, Any] = dict(
+            kwargs, plot_mask=plot_mask, save_location=save_location,
+            overwrite=replace, saturation_adu=saturation_adu,
+        )
+        with tqdm(total=len(selected), desc='Cosmic-ray removal', unit='image') as progress:
+            if workers == 1:
+                for path in selected:
+                    progress.set_postfix_str(path.name)
+                    destination = self._remove_cosmic_ray(path, **options)
+                    replacements[path] = destination
+                    counts[destination] = int(fits.getheader(destination)['CRNPIX'])
+                    progress.update()
+            else:
+                context = multiprocessing.get_context('spawn')
+                pool = context.Pool(
+                    processes=min(int(workers), len(selected)),
+                    initializer=_initialize_cosmic_ray_worker,
                 )
-                replacements[path] = destination
-                counts[destination] = fits.getheader(destination)['CRNPIX']
+                try:
+                    for source, destination, count in pool.imap_unordered(
+                        _cosmic_ray_worker, ((path, options) for path in selected),
+                        chunksize=1,
+                    ):
+                        replacements[source] = destination
+                        counts[destination] = count
+                        progress.set_postfix_str(source.name)
+                        progress.update()
+                    pool.close()
+                    pool.join()
+                except BaseException:
+                    # Stop outstanding writes and reap children before propagating
+                    # worker errors or a notebook KeyboardInterrupt to the caller.
+                    pool.terminate()
+                    pool.join()
+                    raise
+
+        # Completion order must not change public mapping or collection order.
+        replacements = {path: replacements[path] for path in selected}
+        counts = {destination: counts[destination] for destination in replacements.values()}
 
         self._image_collection = rebuild(self._image_collection, replacements=replacements)
         self._cosmic_ray_counts = counts
