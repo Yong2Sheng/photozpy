@@ -23,6 +23,7 @@ def run_isolated(
     comparison_pairs: list[tuple[Path, Path]] | None = None,
     preview_only: bool = False,
     region_sessions: list[dict[str, str]] | None = None,
+    cosmic_ray_review: bool = False,
 ) -> None:
     """Wait for a GUI child and restore decisions, including on failure."""
     with tempfile.TemporaryDirectory(prefix="photozpy-review-") as directory:
@@ -40,6 +41,7 @@ def run_isolated(
                 None if comparison_pairs is None else
                 [[str(before), str(after)] for before, after in comparison_pairs]
             ),
+            "cosmic_ray_review": cosmic_ray_review,
         }), encoding="utf-8")
         environment = os.environ.copy()
         # Use the same checkout as the caller, including editable installs.
@@ -98,7 +100,12 @@ def main() -> None:
     elif config.get('comparison_pairs') is not None:
         from .comparison_reviewer import ImageComparisonReviewer
 
-        reviewer = ImageComparisonReviewer(
+        comparison_type = ImageComparisonReviewer
+        if config.get('cosmic_ray_review'):
+            from .cosmic_ray_reviewer import CosmicRayReviewer
+
+            comparison_type = CosmicRayReviewer
+        reviewer = comparison_type(
             config['comparison_pairs'], adapter=adapter, isolated=False,
         )
     elif config.get('preview_only'):

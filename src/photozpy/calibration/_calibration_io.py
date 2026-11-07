@@ -166,11 +166,14 @@ def rebuild(
     source: ImageInput,
     replacements: dict[Path, Path] | None = None,
     additions: dict[int, list[Path]] | None = None,
+    exclusions: set[Path] | None = None,
 ) -> ImageInput:
     """Return selections containing replacements and newly generated masters.
 
     Include only known input members and explicit outputs; do not rescan unrelated
     files. Files outside a child's original location retain absolute paths.
+    exclusions removes reviewed members and preserves empty selections using a
+    discovery pattern that cannot match filenames, including after refresh.
     """
     replacements = {} if replacements is None else replacements
     additions = {} if additions is None else additions
@@ -179,8 +182,15 @@ def rebuild(
     for child in children(source):
         selected = [replacements.get(path, path) for path in paths(child)]
         selected.extend(additions.get(id(child), []))
+        if exclusions is not None:
+            selected = [path for path in selected if path not in exclusions]
         selected = list(dict.fromkeys(selected))
         if not selected:
+            if exclusions is not None:
+                # filenames=[] would rescan the directory in CCDProc 2.5.1.
+                result_children.append(ImageFileCollection(
+                    location=child.location, glob_include='', keywords='*', ext=child.ext,
+                ))
             continue
 
         parents = {path.parent for path in selected}

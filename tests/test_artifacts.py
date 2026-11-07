@@ -395,3 +395,154 @@ def test_real_lacosmic_removes_impulse_without_gain_scaling_star(tmp_path):
     assert not cmask[32, 30]
     assert np.median(cleaned.data) == pytest.approx(1000., abs=2.)
     assert np.sum(cleaned.data[aperture] - 1000.) / original_flux == pytest.approx(1., abs=0.01)
+
+
+@pytest.mark.parametrize('workers', [0, -1, True, False, 1.5, '2', None])
+def test_invalid_workers_fail_before_backups(tmp_path, workers):
+    light = image(tmp_path)
+    original = light.read_bytes()
+    with pytest.raises(ValueError, match='workers must'):
+        Artifacts(collection(tmp_path), overwrite=True).remove_cosmic_ray(workers=workers)
+    assert light.read_bytes() == original
+    assert not (tmp_path / 'before_cosmic_ray').exists()
+
+
+@pytest.mark.parametrize('background', [np.ones((16, 16)), [[1.] * 16] * 16])
+def test_parallel_rejects_image_arrays_before_backups(tmp_path, background):
+    image(tmp_path)
+    with pytest.raises(ValueError, match='Non-scalar'):
+        Artifacts(collection(tmp_path), overwrite=True).remove_cosmic_ray(
+            workers=2, inbkg=background,
+        )
+    assert not (tmp_path / 'before_cosmic_ray').exists()
+
+
+@pytest.mark.parametrize('workers', [2, 4])
+def test_spawn_matches_serial_and_preserves_selection_order(tmp_path, workers):
+    rng = np.random.default_rng(42)
+    mask = np.zeros((48, 48), dtype=bool)
+    mask[3, 4] = True
+    for index in range(3):
+        data = rng.normal(1000., 5., mask.shape).astype(np.float32)
+        data[23, 26] += 20000.
+        image(tmp_path / 'input', f'{index}.fits', data=data, mask=mask, GAIN=1. + index)
+    other = image(tmp_path / 'input', 'other.fits', FIELD='field_b')
+    bias = image(tmp_path / 'input', 'bias.fits', IMTYPE='Bias')
+    originals = {path: path.read_bytes() for path in (tmp_path / 'input').glob('*.fits')}
+    filenames = ['2.fits', 'other.fits', '0.fits', 'bias.fits', '1.fits']
+
+    def run(count, output):
+        selected = ImageFileCollection(tmp_path / 'input', filenames=filenames, keywords='*')
+        cleaner = Artifacts(selected)
+        cleaner.remove_cosmic_ray(
+            workers=count, save_location=output, saturation_adu=65535.,
+            headers_values={'FIELD': 'field_a'}, plot_mask=True,
+        )
+        return cleaner
+
+    serial = run(1, tmp_path / 'serial')
+    parallel = run(workers, tmp_path / 'parallel')
+    assert [path.name for path in parallel.cosmic_ray_counts] == ['2.fits', '0.fits', '1.fits']
+    assert [path.name for path in parallel.backup_paths] == ['2.fits', '0.fits', '1.fits']
+    assert [str(path).split('/')[-1] for path in parallel.image_collection.files] == filenames
+    assert {path: path.read_bytes() for path in originals} == originals
+    assert not (tmp_path / 'parallel' / other.name).exists()
+    assert not (tmp_path / 'parallel' / bias.name).exists()
+    for output, before in parallel.backup_paths.items():
+        reference = tmp_path / 'serial' / output.name
+        with fits.open(reference) as expected, fits.open(output) as actual:
+            assert [hdu.name for hdu in actual] == ['PRIMARY', 'MASK', 'CMASK']
+            for left, right in zip(expected, actual):
+                np.testing.assert_array_equal(left.data, right.data)
+            for key in ('CRNPIX', 'CRCORR', 'CRMETHOD', 'BUNIT', 'GAIN', 'RDNOISE'):
+                assert actual[0].header[key] == expected[0].header[key]
+        assert parallel.cosmic_ray_counts[output] == serial.cosmic_ray_counts[reference]
+        assert before == tmp_path / 'input' / output.name
+        assert output.with_name(f'{output.stem}_cr_mask.png').is_file()
+
+
+def test_spawn_failure_keeps_state_and_reaps_children(tmp_path, monkeypatch):
+    import multiprocessing
+
+    image(tmp_path, 'a.fits')
+    image(tmp_path, 'b.fits', data=np.full((16, 16), np.nan))
+    cleaner = Artifacts(collection(tmp_path), overwrite=True)
+    original_collection = cleaner.image_collection
+    reviews = []
+    monkeypatch.setattr(cleaner, 'preview_in_ds9', lambda: reviews.append(True))
+    existing = {child.pid for child in multiprocessing.active_children()}
+    with pytest.raises(ValueError, match='finite ADU'):
+        cleaner.remove_cosmic_ray(workers=2, preview=True)
+    assert cleaner.image_collection is original_collection
+    assert cleaner.cosmic_ray_counts == {}
+    assert cleaner.backup_paths == {}
+    assert not reviews
+    assert {child.pid for child in multiprocessing.active_children()} == existing
+    assert len(list((tmp_path / 'before_cosmic_ray').glob('*.fits'))) == 2
+
+
+@pytest.mark.parametrize('failure', [None, RuntimeError('worker failed'), KeyboardInterrupt()])
+def test_pool_lifecycle_backups_and_completion_order(tmp_path, fake_lacosmic, monkeypatch, failure):
+    sources = [image(tmp_path, name) for name in ('a.fits', 'b.fits')]
+    events = []
+
+    class Pool:
+        def __init__(self, *, processes, initializer):
+            assert processes == 2  # Cap the requested count at the batch size.
+            assert initializer is artifacts_module._initialize_cosmic_ray_worker
+            assert all((tmp_path / 'before_cosmic_ray' / path.name).exists() for path in sources)
+
+        def imap_unordered(self, worker, tasks, chunksize):
+            assert chunksize == 1
+            if failure is not None:
+                raise failure
+            return iter(worker(task) for task in reversed(list(tasks)))
+
+        def close(self):
+            events.append('close')
+
+        def terminate(self):
+            events.append('terminate')
+
+        def join(self):
+            events.append('join')
+
+    def get_context(method):
+        assert method == 'spawn'
+        return type('Context', (), {'Pool': Pool})()
+
+    monkeypatch.setattr(artifacts_module.multiprocessing, 'get_context', get_context)
+    cleaner = Artifacts(collection(tmp_path), overwrite=True)
+    if failure is None:
+        cleaner.remove_cosmic_ray(workers=4)
+        assert list(cleaner.cosmic_ray_counts) == sources
+        assert events == ['close', 'join']
+    else:
+        with pytest.raises(type(failure)):
+            cleaner.remove_cosmic_ray(workers=4)
+        assert events == ['terminate', 'join']
+        assert cleaner.cosmic_ray_counts == {}
+        assert cleaner.backup_paths == {}
+
+
+@pytest.mark.parametrize('problem', ['header', 'backup', 'destination'])
+def test_parallel_preflight_never_starts_pool(tmp_path, monkeypatch, problem):
+    light = image(tmp_path / 'input')
+    output = tmp_path / 'output'
+    if problem == 'header':
+        image(tmp_path / 'input', 'bad.fits', CRCORR='Yes')
+    elif problem == 'backup':
+        image(tmp_path / 'backups')
+    else:
+        image(output)
+
+    def unexpected_context(*args):
+        pytest.fail('The pool started before preflight completed.')
+
+    monkeypatch.setattr(artifacts_module.multiprocessing, 'get_context', unexpected_context)
+    before = light.read_bytes()
+    with pytest.raises((ValueError, FileExistsError)):
+        Artifacts(collection(light.parent)).remove_cosmic_ray(
+            workers=2, save_location=output, backup_dir=tmp_path / 'backups',
+        )
+    assert light.read_bytes() == before
