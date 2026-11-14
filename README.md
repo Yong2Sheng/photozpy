@@ -202,9 +202,33 @@ the latest checkpoint. A closed session cannot be run again; create another
 
 ## Quick start
 
-Tutorial notebooks are under `docs/`, for example:
+Start with [Photometry Pipeline](docs/tutorials/Photometry_Pipeline.ipynb),
+the notebook for the current optical calibration and photometry workflow.
 
-- `docs/Tutorial.ipynb`
+The notebook covers:
+
+1. Telescope, observation-field, and source setup; image collection and quality review.
+2. FITS header correction, bias/dark/flat calibration, and cosmic-ray removal.
+3. Image registration, stacking, local plate solving, and FWHM measurement.
+4. Standard-star matching and generation and DS9 review of aperture/background regions.
+5. Aperture photometry, per-filter zero points, and calibrated science-target magnitudes.
+
+### Before running the notebook
+
+- Install the environment and external tools described above. Open DS9 for the
+  interactive image and region reviews, and configure Astrometry.net and its
+  index files for local plate solving.
+- Prepare local observation images and a compiled standard-star catalog. These
+  data are not included in this repository.
+- Update `data_root_dir` and `catalog_path` to your local paths. Check the
+  telescope, observation fields, source coordinates, reference images, and
+  processing parameters against your own observations.
+- Use a working copy of the observation data: image rejection moves files, and
+  later processing steps write or update working images and region files.
+
+Run the notebook cells in order, completing the interactive reviews when
+prompted. Additional tutorials and module notes are under
+[`docs/tutorials/`](docs/tutorials/).
 
 ## Testing
 
