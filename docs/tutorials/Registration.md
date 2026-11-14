@@ -79,10 +79,34 @@ These are source-detection settings, not positional matching tolerances.
 
 The 2/8 example is a starting configuration from the old notebook. Both API
 defaults remain 5. The module forwards explicit values unchanged, with no hidden
-parameter search after a failure. Astroalign looks for common geometric patterns;
+parameter search after a failure unless `detection_sigmas` is explicitly supplied.
+Astroalign looks for common geometric patterns;
 it does not require every star found in a reference to appear in the other image.
 By default it uses up to 50 flux-ranked control points per image. Selecting a
 reference band is therefore not a rule to always choose the weakest band.
+
+To try several detection thresholds for each image, supply an explicit list:
+
+```python
+analysis_images = registration.register_images(
+    reference_images=reference_images,
+    detection_sigmas=[5, 6, 7, 8, 9, 10, 11, 12],
+    min_area=8,
+)
+```
+
+`detection_sigmas` overrides the single `detection_sigma` value. Each target starts
+at the beginning of the list and stops at its first successful alignment. Values
+are used in their supplied order; they are not sorted or expanded as endpoints.
+Positive finite fractional values are also accepted. The list must be nonempty.
+Only star-matching failures (no acceptable transform or too few detected stars)
+trigger another attempt. Other errors fail immediately. Attempts always use the
+original target pixels, so failed attempts do not accumulate resampling. If all
+candidates fail, the error lists the attempted values and chains the last cause;
+the failed target remains unwritten. INFO messages report retries and success.
+The successful threshold is recorded as `REGSIG` in newly registered FITS headers.
+Existing matching registrations are reused even if the candidate list changes;
+this option does not select an optimal fit among successful thresholds.
 
 Each FIELD has a fixed progress-bar title. The postfix gives the direction:
 `Aligning image.fits to reference.fits`. Only basenames are shown. The reference

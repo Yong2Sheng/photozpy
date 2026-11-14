@@ -440,3 +440,124 @@ def test_reusing_registration_does_not_reject_a_later_valid_wcs(tmp_path, fake_r
     processor.register_images("SDSS_g'", overwrite=False)
     assert not fake_register
     assert target.read_bytes() == before
+
+
+@pytest.mark.parametrize('with_cmask', [False, True])
+@pytest.mark.parametrize('entry_point', ['register_images', 'Register_images'])
+def test_sigma_candidates_retry_in_order_per_target_and_reuse(
+    tmp_path, monkeypatch, with_cmask, entry_point, caplog,
+):
+    image(tmp_path, 'a.fits')
+    first = image(tmp_path, 'b.fits', value=200.)
+    second = image(tmp_path, 'c.fits', value=300.)
+    if with_cmask:
+        for path in tmp_path.glob('*.fits'):
+            with fits.open(path, mode='update') as hdul:
+                hdul.append(fits.ImageHDU(np.zeros((8, 8), dtype=np.uint8), name='CMASK'))
+    calls = []
+
+    def align(source, reference, *masks, min_area, detection_sigma, **kwargs):
+        value = int(source.data[0, 0])
+        calls.append((value, detection_sigma))
+        assert min_area == 8
+        if value == 200 and detection_sigma != 7:
+            raise registration_module.MaxIterError('no matching triangles')
+        result = (source.data.copy(), np.zeros(source.shape, dtype=bool))
+        return (*result, np.zeros(source.shape, dtype=bool)) if with_cmask else result
+
+    monkeypatch.setattr(
+        registration_module.Registration if with_cmask else registration_module,
+        '_align_with_cmask' if with_cmask else 'register', staticmethod(align) if with_cmask else align,
+    )
+    processor = Registration(collection(tmp_path), overwrite=True)
+    with caplog.at_level('INFO', logger=registration_module.__name__):
+        getattr(processor, entry_point)(
+            "SDSS_g'", min_area=8, detection_sigmas=[5, 6, 7, 8],
+        )
+    assert calls == [(200, 5), (200, 6), (200, 7), (300, 5)]
+    assert fits.getheader(first)['REGSIG'] == 7
+    assert fits.getheader(second)['REGSIG'] == 5
+    assert 'matched at detection_sigma=7' in caplog.text
+    before = {path: path.read_bytes() for path in tmp_path.glob('*.fits')}
+    calls.clear()
+    processor.register_images("SDSS_g'", detection_sigmas=[10, 12], overwrite=False)
+    assert not calls
+    assert all(path.read_bytes() == data for path, data in before.items())
+
+
+@pytest.mark.parametrize('failure', [
+    registration_module.MaxIterError('no matching triangles'),
+    ValueError('Reference stars in source image are less than the minimum value (3).'),
+])
+def test_sigma_candidates_exhaustion_preserves_target(tmp_path, monkeypatch, failure):
+    image(tmp_path, 'a.fits')
+    target = image(tmp_path, 'b.fits')
+    before = target.read_bytes()
+    calls = []
+
+    def fail(*args, detection_sigma, **kwargs):
+        calls.append(detection_sigma)
+        raise failure
+
+    monkeypatch.setattr(registration_module, 'register', fail)
+    with pytest.raises(RuntimeError, match=r'attempted detection_sigmas=\[5, 6, 7\]') as error:
+        Registration(collection(tmp_path), overwrite=True).register_images(
+            "SDSS_g'", detection_sigmas=[5, 6, 7],
+        )
+    assert error.value.__cause__ is failure
+    assert calls == [5, 6, 7]
+    assert target.read_bytes() == before
+
+
+@pytest.mark.parametrize('failure', [OSError('read error'), ValueError('invalid output shape')])
+def test_sigma_candidates_do_not_retry_unrelated_errors(tmp_path, monkeypatch, failure):
+    image(tmp_path, 'a.fits')
+    target = image(tmp_path, 'b.fits')
+    before = target.read_bytes()
+    calls = []
+
+    def fail(*args, detection_sigma, **kwargs):
+        calls.append(detection_sigma)
+        raise failure
+
+    monkeypatch.setattr(registration_module, 'register', fail)
+    with pytest.raises(RuntimeError) as error:
+        Registration(collection(tmp_path), overwrite=True).register_images(
+            "SDSS_g'", detection_sigmas=[5, 6, 7],
+        )
+    assert error.value.__cause__ is failure
+    assert calls == [5]
+    assert target.read_bytes() == before
+
+
+@pytest.mark.parametrize('sigmas', [[], '5,12', 5, [0, 5], [-1], [float('nan')],
+                                    [float('inf')], [True], ['5'], [None]])
+def test_invalid_sigma_candidates_fail_before_writes(tmp_path, fake_register, sigmas):
+    reference = image(tmp_path, 'a.fits')
+    target = image(tmp_path, 'b.fits')
+    before = {p: p.read_bytes() for p in (reference, target)}
+    with pytest.raises(ValueError, match='detection_sigmas'):
+        Registration(collection(tmp_path), overwrite=True).register_images(
+            "SDSS_g'", detection_sigmas=sigmas,
+        )
+    assert not fake_register
+    assert all(p.read_bytes() == data for p, data in before.items())
+
+
+def test_sigma_candidates_preserve_explicit_order_and_override_single_sigma(tmp_path, monkeypatch):
+    image(tmp_path, 'a.fits')
+    target = image(tmp_path, 'b.fits')
+    calls = []
+
+    def align(source, reference, *, detection_sigma, **kwargs):
+        calls.append(detection_sigma)
+        if detection_sigma == 8.5:
+            raise registration_module.MaxIterError('no matching triangles')
+        return source.data.copy(), np.zeros(source.shape, dtype=bool)
+
+    monkeypatch.setattr(registration_module, 'register', align)
+    Registration(collection(tmp_path), overwrite=True).register_images(
+        "SDSS_g'", detection_sigma=99, detection_sigmas=[8.5, 5.5, 7.5],
+    )
+    assert calls == [8.5, 5.5]
+    assert fits.getheader(target)['REGSIG'] == 5.5

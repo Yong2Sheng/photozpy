@@ -107,3 +107,26 @@ def test_comparison_pairs_cross_process_boundary(tmp_path, monkeypatch):
         comparison_pairs=[(before, after)],
     )
     restore.assert_called_once_with(state)
+
+
+def test_region_deletion_sync_option_crosses_process_boundary(tmp_path, monkeypatch):
+    process = Mock()
+    process.wait.return_value = 0
+    process.poll.return_value = 0
+    sessions = [{'root': str(tmp_path), 'manifest': 'regions.json'}]
+    state = {'index': 1, 'history': ['good'], 'rejected': []}
+
+    def start(command, **kwargs):
+        request = json.loads(Path(command[-2]).read_text())
+        assert request['sync_deletions'] is True
+        assert request['region_sessions'] == sessions
+        Path(command[-1]).write_text(json.dumps(state))
+        return process
+
+    monkeypatch.setattr(worker.subprocess, 'Popen', start)
+    restore = Mock()
+    worker.run_isolated(
+        [], tmp_path, None, restore,
+        region_sessions=sessions, sync_deletions=True,
+    )
+    restore.assert_called_once_with(state)

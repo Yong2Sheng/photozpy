@@ -267,7 +267,7 @@ pd.DataFrame(standard_regions.records)
 ```python
 # Load this image with both editable region files and fixed initial crosses.
 # Save & Next validates and saves edits; on the last image it completes review.
-standard_regions.review()
+standard_regions.review(sync_deletions=True)
 
 # Inspect final coordinates, radii and per-image acceptance after closing controls.
 pd.DataFrame(standard_regions.records)
@@ -296,8 +296,24 @@ automatically moves regions or stops navigation. Records include background_x,
 background_y and center_offset; x/y remain the source-aperture center. Initial
 generation coordinates are retained for comparison.
 
-Deleting both shapes rejects that star only for this image; deleting just
-one blocks saving. Editing a radius is allowed if the radius ordering remains
+Deleting both shapes rejects that star; deleting just one blocks saving.
+With `sync_deletions=True`, Save & Next also excludes that standard star's paired
+regions from all unreviewed sessions in the current queue with the same analysis
+root, FIELD and source ID. Science targets and already reviewed image/source
+decisions remain unchanged. The controls report how many stars and images were
+updated, and how many reviewed images still retain those stars. Moves, radius
+changes and background adjustments are never copied. Synchronized records remain
+unreviewed and retain their own geometry, with `accepted=False` and a
+`deletion_sync` record identifying the originating image, filter and manifest.
+Both region files and the manifest are saved immediately, so exclusions survive
+Quit, interruption and `load_regions()`. Quit and Previous discard unsaved edits
+without propagating them. Previously saved exclusions are reapplied idempotently
+on Save & Next, including when revisiting a review after a partial write failure;
+restoring a star locally does not automatically restore it in other filters.
+The default `sync_deletions=False` keeps deletions local to the current image.
+Only sessions included in this review queue participate.
+
+Editing a radius is allowed if the radius ordering remains
 valid. Preserve the source ID and role tags when editing. Unsupported shapes or
 unrecognized IDs block saving, rather than silently corrupting associations.
 

@@ -340,7 +340,8 @@ def test_background_failure_is_recorded_and_all_deleted_regions_are_saved(
     assert not Regions.read(session.background_path, format="ds9")
 
 
-def test_worker_dispatches_region_sessions_without_notebook_tk(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sync_deletions", [False, True])
+def test_worker_dispatches_region_sessions_without_notebook_tk(tmp_path, monkeypatch, sync_deletions):
     from photozpy.interactive_ds9 import _review_process, adapter, region_reviewer
 
     path, sources = inputs(tmp_path)
@@ -356,6 +357,7 @@ def test_worker_dispatches_region_sessions_without_notebook_tk(tmp_path, monkeyp
                     }
                 ],
                 "adapter": None,
+                "sync_deletions": sync_deletions,
             }
         )
     )
@@ -367,6 +369,7 @@ def test_worker_dispatches_region_sessions_without_notebook_tk(tmp_path, monkeyp
     )
     _review_process.main()
     assert constructor.call_args.kwargs["isolated"] is False
+    assert constructor.call_args.kwargs["sync_deletions"] is sync_deletions
     assert constructor.call_args.args[0][0].image_path == path
     constructor.return_value.run.assert_called_once()
 
@@ -504,7 +507,7 @@ def test_batch_review_uses_one_queue_and_records_are_copies(tmp_path, monkeypatc
     constructor = Mock()
     monkeypatch.setattr(region_reviewer, "RegionReviewer", constructor)
     batch.review(isolated=True)
-    constructor.assert_called_once_with(batch.sessions, isolated=True)
+    constructor.assert_called_once_with(batch.sessions, isolated=True, sync_deletions=False)
     constructor.return_value.run.assert_called_once()
     records = batch.records
     records[0]["x"] = -100
@@ -605,3 +608,136 @@ def test_load_regions_rejects_changed_source_identities(tmp_path):
         PhotometryRegions.load_regions(
             ImageFileCollection(tmp_path), different, root=tmp_path
         )
+
+
+def standard_review_queue(tmp_path):
+    path, sources = inputs(tmp_path)
+    second_filter(path)
+    second_filter(path, filter_name="SDSS_i'")
+    return PhotometryRegions.generate_regions(
+        ImageFileCollection(tmp_path), sources, root=tmp_path,
+    )
+
+
+def without_star(session, source_id="catalog-A"):
+    return "\n".join(
+        line for line in combined(session).splitlines()
+        if f"tag={{id:{source_id}}}" not in line
+    )
+
+
+@pytest.mark.usefixtures("fake_tkinter")
+@pytest.mark.parametrize("enabled", [False, True])
+def test_saved_deletions_sync_only_when_enabled_and_keep_geometry(tmp_path, enabled):
+    batch = standard_review_queue(tmp_path)
+    current, *future = batch.sessions
+    before = [session.records for session in future]
+    original_images = {s.image_path: s.image_path.read_bytes() for s in batch.sessions}
+    adapter = Mock(spec=DS9Adapter)
+    reviewer = RegionReviewer(
+        batch.sessions, adapter=adapter, isolated=False, sync_deletions=enabled,
+    )
+    reviewer.show_current()
+    # Delete A and independently move/resize B on the current image.
+    adapter.get.return_value = (
+        "image\ncircle(91,90,8) # tag={id:catalog-B} tag={aperture}\n"
+        "annulus(93,92,16,25) # tag={id:catalog-B} tag={background}\n"
+    )
+    reviewer.mark_good()
+    assert reviewer.index == 1
+    assert current.records[1]['x'] == 90
+    for session, original in zip(future, before):
+        restored = PhotometryRegions.load(session.root, session.manifest_path)
+        assert restored._state['reviewed'] is False
+        assert restored.records[0]['reviewed'] is False
+        assert restored.records[0]['accepted'] is (not enabled)
+        for row, previous in zip(restored.records, original):
+            assert {k: v for k, v in row.items() if k not in ('accepted', 'deletion_sync')} == {
+                k: v for k, v in previous.items() if k not in ('accepted', 'deletion_sync')
+            }
+        for path in (restored.aperture_path, restored.background_path):
+            assert ('id:catalog-A' in path.read_text()) is (not enabled)
+        if enabled:
+            assert restored.records[0]['deletion_sync']['filter_name'] == current._state['filter_name']
+    if enabled:
+        assert 'excluded 1 standard stars in 2 unreviewed images' in reviewer.error_label.options['text']
+    assert all(p.read_bytes() == data for p, data in original_images.items())
+    reviewer.quit_review()
+
+
+def test_deletion_sync_skips_reviewed_other_fields_and_science(tmp_path):
+    batch = standard_review_queue(tmp_path)
+    current, unreviewed, reviewed = batch.sessions
+    reviewed.save_review(combined(reviewed))
+    # One per-source reviewed decision must also be preserved.
+    unreviewed._state['sources'][0]['reviewed'] = True
+    other = PhotometryRegions.load(current.root, current.manifest_path)
+    other._state = module.deepcopy(other._state)
+    other._state['sources'][0]['field_name'] = 'another_field'
+    other._state['sources'][1]['source_role'] = 'science'
+    other._state['reviewed'] = False
+    original = [s.records for s in (unreviewed, reviewed, other)]
+    current.save_review(current.initial_regions())
+    result = module.PhotometryRegionCollection([current, unreviewed, reviewed, other])._sync_deletions_from(current)
+    assert result == {'sources': 1, 'images': 1, 'reviewed_images': 2}
+    assert unreviewed.records[0] == original[0][0]
+    assert not unreviewed.records[1]['accepted']
+    assert reviewed.records == original[1]
+    assert other.records == original[2]
+    # Reapplying is harmless and does not resurrect any exclusions.
+    again = module.PhotometryRegionCollection([current, unreviewed, reviewed])._sync_deletions_from(current)
+    assert again['images'] == 0
+
+
+@pytest.mark.usefixtures("fake_tkinter")
+def test_invalid_or_unsaved_review_never_syncs(tmp_path):
+    batch = standard_review_queue(tmp_path)
+    current, *future = batch.sessions
+    before = [s.aperture_path.read_bytes() for s in future]
+    adapter = Mock(spec=DS9Adapter)
+    reviewer = RegionReviewer(batch.sessions, adapter=adapter, isolated=False, sync_deletions=True)
+    reviewer.show_current()
+    adapter.get.return_value = 'image\ncircle(61,61,9) # tag={id:catalog-A} tag={aperture}'
+    reviewer.mark_good()
+    assert reviewer.index == 0
+    assert [s.aperture_path.read_bytes() for s in future] == before
+    adapter.get.return_value = without_star(current)
+    reviewer.quit_review()
+    assert [s.aperture_path.read_bytes() for s in future] == before
+    assert current._state['reviewed'] is False
+
+
+@pytest.mark.usefixtures("fake_tkinter")
+def test_sync_write_failure_blocks_navigation_and_can_be_retried(tmp_path, monkeypatch):
+    batch = standard_review_queue(tmp_path)
+    current, first, second = batch.sessions
+    adapter = Mock(spec=DS9Adapter)
+    adapter.get.return_value = without_star(current)
+    reviewer = RegionReviewer(batch.sessions, adapter=adapter, isolated=False, sync_deletions=True)
+    reviewer.show_current()
+    publish = second._publish
+    monkeypatch.setattr(second, '_publish', Mock(side_effect=OSError('disk error')))
+    reviewer.mark_good()
+    assert reviewer.index == 0
+    assert not first.records[0]['accepted']
+    assert second.records[0]['accepted']
+    monkeypatch.setattr(second, '_publish', publish)
+    reviewer.mark_good()
+    assert reviewer.index == 1
+    assert not second.records[0]['accepted']
+    assert not first._state['reviewed']
+    reviewer.quit_review()
+
+
+def test_collection_and_isolated_worker_forward_deletion_sync(tmp_path, monkeypatch):
+    from photozpy.interactive_ds9 import region_reviewer, _review_process
+    batch = standard_review_queue(tmp_path)
+    constructor = Mock()
+    monkeypatch.setattr(region_reviewer, 'RegionReviewer', constructor)
+    batch.review(sync_deletions=True, isolated=True)
+    constructor.assert_called_once_with(batch.sessions, isolated=True, sync_deletions=True)
+    worker = Mock()
+    monkeypatch.setattr(_review_process, 'run_isolated', worker)
+    reviewer = RegionReviewer(batch.sessions, isolated=True, sync_deletions=True)
+    reviewer.run()
+    assert worker.call_args.kwargs['sync_deletions'] is True

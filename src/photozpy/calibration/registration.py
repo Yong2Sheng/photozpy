@@ -10,13 +10,13 @@ The refactoring updates collection/field APIs, reference tracking, and masks.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
 import logging
 from pathlib import Path
 
-from astroalign import apply_transform, find_transform, register
+from astroalign import MaxIterError, apply_transform, find_transform, register
 from astropy.io import fits
 from astropy.nddata import CCDData
 import numpy as np
@@ -121,6 +121,7 @@ class Registration:
         min_area: int = 5,
         detection_sigma: float = 5,
         *,
+        detection_sigmas: Sequence[float] | None = None,
         reference_images: Mapping[str, str | Path] | None = None,
         save_location: str | Path | None = None,
         overwrite: bool | None = None,
@@ -150,6 +151,14 @@ class Registration:
             background-subtracted image. Lower values admit fainter candidates
             and more noise; higher values may leave too few common stars.
             This is not an integrated stellar S/N or a matching tolerance.
+        detection_sigmas : sequence of float or None, optional
+            Explicit positive, finite detection thresholds to try in order for
+            each target, e.g. [5, 6, 7, 8, 9, 10, 11, 12]. Overrides
+            detection_sigma when supplied. Stop at the first successful fit;
+            retry only failed star matching, including too few detected stars.
+            Exhausting the list raises RuntimeError without writing the target.
+            None retains the single detection_sigma behavior. Successful targets
+            record the actual threshold in the FITS header REGSIG.
         reference_images : mapping of str to path, or None, optional
             FIELD-to-specific-FITS mapping, for example
             {'science_field': analysis_dir / 'science_i_003.fits'}.
@@ -199,15 +208,17 @@ class Registration:
         reported as Reusing and is not resampled a second time.
         Star detection runs independently on each image/reference pair; the
         algorithm looks for common patterns, not every star in the reference.
-        Both detection settings are forwarded unchanged to astroalign; neither
-        is adjusted automatically after failure. The legacy notebook's 2/8
-        combination is an explicit starting choice, not a universal optimum.
+        Detection settings are forwarded unchanged to astroalign. Optional
+        detection_sigmas enables ordered per-target retries using only the
+        supplied values. Completed matching registrations are still reused.
+        The legacy notebook's 2/8 combination is not a universal optimum.
         Registration is a resampling operation, not plate solving.
         """
         return self.Register_images(
             filter=reference_filter,
             min_area=min_area,
             detection_sigma=detection_sigma,
+            detection_sigmas=detection_sigmas,
             reference_images=reference_images,
             save_location=save_location,
             overwrite=overwrite,
@@ -219,6 +230,7 @@ class Registration:
         min_area: int = 5,
         detection_sigma: float = 5,
         *,
+        detection_sigmas: Sequence[float] | None = None,
         reference_images: Mapping[str, str | Path] | None = None,
         save_location: str | Path | None = None,
         overwrite: bool | None = None,
@@ -230,8 +242,21 @@ class Registration:
         """
         if not isinstance(min_area, int) or isinstance(min_area, bool) or min_area <= 0:
             raise ValueError('min_area must be a positive integer.')
-        if not np.isfinite(detection_sigma) or detection_sigma <= 0:
-            raise ValueError('detection_sigma must be positive and finite.')
+        if detection_sigmas is not None and (
+            not isinstance(detection_sigmas, Sequence)
+            or isinstance(detection_sigmas, (str, bytes))
+            or len(detection_sigmas) == 0
+        ):
+            raise ValueError('detection_sigmas must be a nonempty sequence of positive finite numbers.')
+        candidates = (detection_sigma,) if detection_sigmas is None else tuple(detection_sigmas)
+        for sigma in candidates:
+            if (
+                isinstance(sigma, (bool, np.bool_))
+                or not isinstance(sigma, (int, float, np.integer, np.floating))
+                or not np.isfinite(sigma) or sigma <= 0
+            ):
+                name = 'detection_sigma' if detection_sigmas is None else 'detection_sigmas'
+                raise ValueError(f'{name} must contain only positive finite numbers.')
 
         replace: bool = self._overwrite if overwrite is None else overwrite
         plans: list[_RegistrationPlan] = self._plan_groups(
@@ -247,7 +272,7 @@ class Registration:
             )
             self._Register_images(
                 plan, min_area=min_area, detection_sigma=detection_sigma,
-                overwrite=replace,
+                detection_sigmas=candidates, overwrite=replace,
             )
             replacements.update(plan.destinations)
 
@@ -516,6 +541,7 @@ class Registration:
         detection_sigma: float = 5,
         *,
         overwrite: bool,
+        detection_sigmas: Sequence[float] | None = None,
     ) -> None:
         """Register one FIELD, keeping the original per-target astroalign call."""
         reference_image_path: Path = plan.reference_image_path
@@ -567,31 +593,44 @@ class Registration:
                 target_data: CCDData = Registration._read_ccd(path)
                 target_cmask = Registration._read_cmask(path)
 
-                # Original star-pattern registration, including its default
-                # interpolation and source-detection parameters. CCDData allows
-                # astroalign to propagate validity masks onto the footprint.
-                # Cosmic detections affect star finding only, not pixel validity.
-                # Each image supplies its own background/noise estimate. These
-                # are detection controls, not a list of required reference stars
-                # or a position-matching tolerance; do not tune them silently.
-                try:
-                    aligned_cmask = None
-                    if target_cmask is not None or reference_cmask is not None:
-                        img_aligned, footprint, aligned_cmask = Registration._align_with_cmask(
-                            target_data, reference_data, target_cmask, reference_cmask,
-                            min_area=min_area, detection_sigma=detection_sigma,
+                # Each attempt uses the original, unresampled input. Only
+                # matching failures can benefit from another detection threshold.
+                candidates = (detection_sigma,) if detection_sigmas is None else detection_sigmas
+                attempted = []
+                for sigma in candidates:
+                    attempted.append(sigma)
+                    try:
+                        aligned_cmask = None
+                        if target_cmask is not None or reference_cmask is not None:
+                            img_aligned, footprint, aligned_cmask = Registration._align_with_cmask(
+                                target_data, reference_data, target_cmask, reference_cmask,
+                                min_area=min_area, detection_sigma=sigma,
+                            )
+                        else:
+                            img_aligned, footprint = register(
+                                target_data, reference_data,
+                                min_area=min_area, detection_sigma=sigma,
+                                propagate_mask=True,
+                            )
+                    except Exception as exc:
+                        matching_failure = isinstance(exc, MaxIterError) or (
+                            isinstance(exc, ValueError)
+                            and str(exc).startswith('Reference stars in ')
+                            and 'minimum value' in str(exc)
                         )
-                    else:
-                        img_aligned, footprint = register(
-                            target_data, reference_data,
-                            min_area=min_area, detection_sigma=detection_sigma,
-                            propagate_mask=True,
-                        )
-                except Exception as exc:
-                    raise RuntimeError(
-                        f'{path.name}: registration to {reference_image_path.name} failed '
-                        f'(detection_sigma={detection_sigma}, min_area={min_area}).'
-                    ) from exc
+                        if matching_failure and len(attempted) < len(candidates):
+                            logger.info(
+                                '%s: no match at detection_sigma=%s; trying detection_sigma=%s.',
+                                path.name, sigma, candidates[len(attempted)],
+                            )
+                            continue
+                        raise RuntimeError(
+                            f'{path.name}: registration to {reference_image_path.name} failed '
+                            f'(attempted detection_sigmas={attempted}, min_area={min_area}).'
+                        ) from exc
+                    break
+                if len(attempted) > 1:
+                    logger.info('%s: matched at detection_sigma=%s.', path.name, sigma)
 
                 if img_aligned.shape != reference_data.shape or footprint.shape != reference_data.shape:
                     raise RuntimeError(f'{path.name}: registration returned an invalid output shape.')
@@ -599,6 +638,7 @@ class Registration:
                 if np.all(mask):
                     raise RuntimeError(f'{path.name}: registration has no valid coverage.')
 
+                header_target['REGSIG'] = (sigma, 'Detection sigma used for registration')
                 header_target['ALIGN'] = 'Registered'
                 header_target['REGREF'] = reference_image_path.name
                 header_target['REFHASH'] = plan.reference_hash
