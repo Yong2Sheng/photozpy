@@ -587,3 +587,57 @@ upper-limit flag. A limiting magnitude receives the same additive zero point.
 Catalog errors and zero-point uncertainty are intentionally not propagated;
 adding them is a separate future feature. No exposure-time normalization,
 extinction correction, color term or aperture correction is introduced here.
+
+
+## Optional local-background source masking and checks
+
+Each image keeps its own header FWHM and reviewed source/background geometry.
+Enable the following only for the reviewed-region photometry interface:
+
+```python
+from photozpy.photometry import LocalBackgroundOptions
+
+photometry_table = photometry.run_photometry(
+    sources=(standard_sources, sources),
+    regions=(standard_regions, science_regions),
+    background_options=LocalBackgroundOptions(
+        mask_growth_fwhm=1.5,
+        min_area_fraction=0.5,
+        min_pixels=50,
+        stability_growth_fwhms=(1.0, 1.5, 2.0),
+        stability_tolerance=1.0,
+    ),
+    verbose=False,
+)
+```
+
+SEP detects source footprints once per image at `detection_sigma=3`, `min_area=5`.
+An image-wide background map is used only for this detection. The photometric
+sky estimate remains the sigma-clipped **mean inside each local annulus**.
+Detected footprints are expanded by the requested multiple of that image's
+FWHM and excluded only from annulus statistics. Source aperture sums, saved
+regions, image data and calibration are not modified. CMASK is not used as a
+validity or neighbor mask. If no sources are detected, only validity masks apply.
+
+Effective annulus area is measured after validity masking, source masking and
+sigma clipping. An estimate below either minimum is `invalid_background`, with
+no magnitude assigned; `n_ann`, `mean_bkg` and `background_area_fraction` expose
+available diagnostics. Growth choices are not used to maximize S/N. The primary
+measurement always uses `mask_growth_fwhm`. For each candidate in
+`stability_growth_fwhms`, the background is estimated again. The largest absolute
+change from the primary mean, multiplied by source aperture area and divided by
+the primary **existing model count error**, is `background_stability_sigma`.
+
+`background_stability` is `stable`, `unstable`, `insufficient_area` (a trial has
+inadequate sky area), or `not_checked`. `background_trials` contains the candidate
+means, areas and validity as JSON; `background_warning` explains flagged results.
+Unstable trials do not change primary counts, choose a different mask, or replace
+the detection/UL status. Inspect these columns before using a result. The table
+metadata stores all options. An empty trial tuple explicitly disables stability
+checks; `mask_neighbors=False` enables area checks alone, without requiring FWHM.
+Omitting `background_options` preserves the old computation.
+
+These checks do **not** calibrate count errors for interpolation correlations,
+residual background structure or unresolved sources. Stable mask growth does not
+establish a reliable Gaussian detection significance. Use independent empirical
+noise validation before treating model S/N as a calibrated detection confidence.

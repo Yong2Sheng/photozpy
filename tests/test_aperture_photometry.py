@@ -334,3 +334,111 @@ def test_conflicting_source_owners_fail_without_replacing_measurements(tmp_path)
         )
     assert sources.get_magnitudes(kind="reference") is reference
     assert sources.get_magnitudes(kind="instrumental") is None
+
+
+@pytest.mark.parametrize('kwargs', [
+    {'mask_neighbors': 'yes'}, {'detection_sigma': 0}, {'min_area': True},
+    {'mask_growth_fwhm': float('nan')}, {'min_pixels': 0},
+    {'min_area_fraction': 0}, {'min_area_fraction': 1.1},
+    {'stability_growth_fwhms': [1, -2]}, {'stability_growth_fwhms': '1,2'},
+    {'stability_tolerance': float('inf')},
+])
+def test_local_background_options_validate(kwargs):
+    from photozpy.photometry import LocalBackgroundOptions
+    with pytest.raises(ValueError):
+        LocalBackgroundOptions(**kwargs)
+
+
+def test_masked_local_sky_preserves_aperture_sum_and_improves_injected_sky(tmp_path):
+    from photozpy.photometry import LocalBackgroundOptions
+    path, sources, _, regions = setup_image(tmp_path)
+    rng = np.random.default_rng(834)
+    with fits.open(path, mode='update') as hdul:
+        yy, xx = np.indices(hdul[0].data.shape)
+        hdul[0].data += rng.normal(0, 1.5, xx.shape)
+        hdul[0].data += 80 * np.exp(-((xx-82)**2 + (yy-65)**2) / (2 * 2.6**2))
+    regions.save_review(
+        'image\ncircle(31,31,3) # tag={id:standard} tag={aperture}\n'
+        'annulus(66,66,12,20) # tag={id:standard} tag={background}\n'
+    )
+    original = path.read_bytes()
+    saved = regions.aperture_path.read_bytes(), regions.background_path.read_bytes()
+    phot = Photometry(ImageFileCollection(tmp_path))
+    plain = phot.run_photometry(sources, regions=regions, verbose=False)
+    options = LocalBackgroundOptions()
+    masked = phot.run_photometry(sources, regions=regions, background_options=options, verbose=False)
+    assert masked['src+bkg'][0] == plain['src+bkg'][0]
+    assert abs(masked['mean_bkg'][0].value - 60) < abs(plain['mean_bkg'][0].value - 60)
+    assert .5 < masked['background_area_fraction'][0] < 1
+    assert masked['background_stability'][0] == 'stable'
+    assert masked.meta['local_background_options']['mask_growth_fwhm'] == 1.5
+    assert len(__import__('json').loads(masked['background_trials'][0])) == 3
+    assert path.read_bytes() == original
+    assert saved == (regions.aperture_path.read_bytes(), regions.background_path.read_bytes())
+
+
+def test_local_sky_area_rejection_and_area_only_mode(tmp_path):
+    from photozpy.photometry import LocalBackgroundOptions
+    path, sources, _, regions = setup_image(tmp_path)
+    review(regions)
+    phot = Photometry(ImageFileCollection(tmp_path))
+    rejected = phot.run_photometry(
+        sources, regions=regions, verbose=False,
+        background_options=LocalBackgroundOptions(mask_neighbors=False, min_pixels=10000),
+    )
+    assert rejected['status'][0] == 'invalid_background'
+    assert np.isnan(rejected['mag_inst'][0])
+    assert 'effective background area' in rejected['reason'][0]
+    with fits.open(path, mode='update') as hdul:
+        del hdul[0].header['FWHM']
+    accepted = phot.run_photometry(
+        sources, regions=regions, verbose=False,
+        background_options=LocalBackgroundOptions(mask_neighbors=False),
+    )
+    assert accepted['status'][0] == 'measured'
+    assert accepted['background_stability'][0] == 'not_checked'
+    with pytest.raises(ValueError, match='FWHM'):
+        phot.run_photometry(sources, regions=regions, background_options=LocalBackgroundOptions())
+
+
+def test_no_sources_does_not_create_edge_mask_or_modify_float32_data():
+    from photozpy.photometry.local_background import LocalBackgroundOptions, _LocalBackground
+    from photutils.aperture import CircularAnnulus
+    data = np.full((50, 50), 60, dtype=np.float32)
+    invalid = np.zeros(data.shape, bool)
+    invalid[0, 0] = True
+    data[0, 0] = np.nan
+    original = data.copy()
+    estimator = _LocalBackground(data, invalid, 3., LocalBackgroundOptions(min_pixels=5))
+    stats, result = estimator.statistics(CircularAnnulus((20, 20), 5, 10), 3, 1.5)
+    assert result['valid']
+    assert result['area_fraction'] == pytest.approx(1)
+    assert result['mean'] == 60
+    np.testing.assert_array_equal(data, original)
+
+
+@pytest.mark.parametrize('trial_valid,expected', [(True, 'unstable'), (False, 'insufficient_area')])
+def test_stability_flags_do_not_select_best_snr_or_change_primary(tmp_path, monkeypatch, trial_valid, expected):
+    from photozpy.photometry import LocalBackgroundOptions
+    from photozpy.photometry import local_background as sky
+    path, sources, _, regions = setup_image(tmp_path)
+    review(regions)
+    original = sky._LocalBackground.statistics
+
+    def statistics(self, annulus, clip_sigma, growth):
+        stats, result = original(self, annulus, clip_sigma, growth)
+        if growth == 2.:
+            result['mean'] += 100
+            result['valid'] = trial_valid
+        return stats, result
+
+    monkeypatch.setattr(sky._LocalBackground, 'statistics', statistics)
+    phot = Photometry(ImageFileCollection(tmp_path))
+    result = phot.run_photometry(
+        sources, regions=regions, verbose=False, background_options=LocalBackgroundOptions(),
+    )
+    assert result['background_stability'][0] == expected
+    assert result['background_warning'][0]
+    assert result['mean_bkg'][0].value == 60
+    assert result['src'][0].value == pytest.approx(1000)
+    assert result['status'][0] == 'measured'

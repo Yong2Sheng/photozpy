@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from ..calibration._calibration_io import ImageInput
     from ..sources import Sources
     from .regions import PhotometryRegions, PhotometryRegionCollection
+    from .local_background import LocalBackgroundOptions
 
 
 class Photometry():
@@ -456,6 +457,7 @@ class Photometry():
         *,
         regions: "PhotometryRegions | PhotometryRegionCollection | Sequence[PhotometryRegions | PhotometryRegionCollection] | None" = None,
         require_review: bool = True,
+        background_options: "LocalBackgroundOptions | None" = None,
     ) -> QTable | None:
         """Measure saved aperture/annulus pairs and attach instrumental results.
 
@@ -483,6 +485,14 @@ class Photometry():
             Require completed review records, default True. Explicitly disable
             only for unattended measurements of generated regions.
 
+        background_options : LocalBackgroundOptions or None, optional
+            Opt in to local-annulus neighbor masking, effective-area checks and
+            mask-growth stability diagnostics. None preserves the original
+            background calculation. Source apertures and per-image FWHM remain
+            unchanged. Instability is reported, not optimized away; insufficient
+            primary background area prevents a measurement. The original noise
+            model is retained and is not calibrated by these diagnostics.
+
         Returns
         -------
         astropy.table.QTable
@@ -504,6 +514,8 @@ class Photometry():
         from ..sources import Sources
 
         if regions is None:
+            if background_options is not None:
+                raise ValueError('background_options requires reviewed regions=... photometry.')
             if isinstance(sources, Sources) or (
                 isinstance(sources, Sequence) and all(isinstance(item, Sources) for item in sources)
             ):
@@ -518,6 +530,7 @@ class Photometry():
             bkg_clip_sigma=bkg_clip_sigma,
             src_detection_sigma=src_detection_sigma,
             hdu=hdu, require_review=require_review,
+            background_options=background_options,
         )
         self.phot_table = table
         if verbose:
