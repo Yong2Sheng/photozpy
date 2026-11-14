@@ -24,6 +24,7 @@ def run_isolated(
     preview_only: bool = False,
     region_sessions: list[dict[str, str]] | None = None,
     cosmic_ray_review: bool = False,
+    sync_deletions: bool = False,
 ) -> None:
     """Wait for a GUI child and restore decisions, including on failure."""
     with tempfile.TemporaryDirectory(prefix="photozpy-review-") as directory:
@@ -37,6 +38,7 @@ def run_isolated(
             "adapter": adapter_config,
             "preview_only": preview_only,
             "region_sessions": region_sessions,
+            "sync_deletions": sync_deletions,
             "comparison_pairs": (
                 None if comparison_pairs is None else
                 [[str(before), str(after)] for before, after in comparison_pairs]
@@ -96,7 +98,10 @@ def main() -> None:
             PhotometryRegions.load(item["root"], item["manifest"])
             for item in config["region_sessions"]
         ]
-        reviewer = RegionReviewer(sessions, adapter=adapter, isolated=False)
+        reviewer = RegionReviewer(
+            sessions, adapter=adapter, isolated=False,
+            sync_deletions=config.get("sync_deletions", False),
+        )
     elif config.get('comparison_pairs') is not None:
         from .comparison_reviewer import ImageComparisonReviewer
 

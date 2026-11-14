@@ -8,7 +8,7 @@ import tkinter as tk
 
 from .adapter import DS9Adapter
 from .image_previewer import ImagePreviewer
-from ..photometry.regions import PhotometryRegions
+from ..photometry.regions import PhotometryRegions, PhotometryRegionCollection
 
 
 class RegionReviewer(ImagePreviewer):
@@ -17,6 +17,8 @@ class RegionReviewer(ImagePreviewer):
     Save & Next validates and persists the current pair before advancing. The
     last image is saved by the same button. Previous reloads saved files and
     discards unconfirmed current edits; Quit never saves unconfirmed edits.
+    Optional sync_deletions propagates saved standard exclusions to unreviewed
+    queue entries with the same field/source identity, without copying geometry.
     Initial catalog positions remain fixed blue crosses. macOS uses the
     existing disposable GUI worker, keeping Tk out of the notebook kernel.
     No science image is moved or written, and no source magnitude is changed.
@@ -32,8 +34,10 @@ class RegionReviewer(ImagePreviewer):
         adapter: DS9Adapter | None = None,
         *,
         isolated: bool | None = None,
+        sync_deletions: bool = False,
     ) -> None:
         self.sessions = tuple(sessions)
+        self.sync_deletions = sync_deletions
         self._display_group: tuple | None = None
         if not self.sessions:
             raise ValueError("At least one region session is required.")
@@ -83,7 +87,18 @@ class RegionReviewer(ImagePreviewer):
         try:
             text = self.adapter.get("regions", "-system", "image", "-format", "ds9")
             image_name = self.current_image.name
-            review_warnings = self.sessions[self.index].save_review(text)
+            session = self.sessions[self.index]
+            review_warnings = session.save_review(text)
+            sync_summary = ""
+            if self.sync_deletions:
+                queue = PhotometryRegionCollection(list(self.sessions))
+                result = queue._sync_deletions_from(session)
+                if result["images"] or result["reviewed_images"]:
+                    sync_summary = (
+                        f"Deletion sync: excluded {result['sources']} standard stars "
+                        f"in {result['images']} unreviewed images. "
+                        f"Kept {result['reviewed_images']} reviewed images unchanged."
+                    )
         except Exception as error:
             self._show_error("Region save error", str(error))
             # Keep editing and allow another save attempt without reloading.
@@ -93,14 +108,18 @@ class RegionReviewer(ImagePreviewer):
         super().mark_good()
         # show_current/finish may clear the error label; show saved warnings last.
         # Do not use _show_error: a warning must not block subsequent navigation.
-        if review_warnings:
+        if review_warnings or sync_summary:
             self.error_label.config(
                 text=(
-                    f"Warning — saved {image_name}:\n"
+                    (f"Warning — saved {image_name}:\n" if review_warnings else "")
                     + "\n".join(review_warnings)
+                    + (
+                        ("\n" if review_warnings else "") + sync_summary
+                        if sync_summary else ""
+                    )
                     + (f"\n{self.error_message}" if self.error_message else "")
                 ),
-                fg="firebrick",
+                fg="firebrick" if review_warnings or self.error_message else "darkgreen",
             )
 
     def run(self) -> list:
@@ -123,6 +142,7 @@ class RegionReviewer(ImagePreviewer):
                 self.rejected_dir,
                 config,
                 self._restore_state,
+                sync_deletions=self.sync_deletions,
                 region_sessions=[
                     {
                         "root": str(session.root),

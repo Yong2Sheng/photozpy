@@ -750,12 +750,14 @@ class PhotometryRegions:
         self._publish(state)
         return review_warnings
 
-    def review(self, *, isolated: bool | None = None) -> None:
+    def review(
+        self, *, isolated: bool | None = None, sync_deletions: bool = False,
+    ) -> None:
         """Open the editable DS9 reviewer; Next saves, Quit discards unsaved edits."""
         from ..interactive_ds9.region_reviewer import RegionReviewer
 
         try:
-            RegionReviewer([self], isolated=isolated).run()
+            RegionReviewer([self], isolated=isolated, sync_deletions=sync_deletions).run()
         finally:
             self._state = self.load(self.root, self.manifest_path)._state
 
@@ -789,12 +791,69 @@ class PhotometryRegionCollection:
             for row in session.records
         ]
 
-    def review(self, *, isolated: bool | None = None) -> None:
-        """Review the entire queue; Save & Next saves the current file pair."""
+    def _sync_deletions_from(self, source: PhotometryRegions) -> dict:
+        """Persist standard exclusions in unreviewed sessions in this queue.
+
+        Reapply all saved exclusions, making retry after a partial I/O failure
+        idempotent. Preserve all geometry and review flags. Never resurrect a
+        rejected source or modify another analysis root or reviewed decision.
+        """
+        rejected = {
+            (row["field_name"], row["source_id"])
+            for row in source.records
+            if row["source_role"] == "standard" and not row["accepted"]
+        }
+        changed_sources: set[tuple[str, str]] = set()
+        changed_images = 0
+        reviewed_images = 0
+        for target in self.sessions:
+            if target is source or target.root != source.root:
+                continue
+            state = deepcopy(target._state)
+            changed = False
+            skipped = False
+            for row in state["sources"]:
+                key = (row["field_name"], row["source_id"])
+                if row["source_role"] != "standard" or key not in rejected:
+                    continue
+                if state.get("reviewed", False) or row.get("reviewed", False):
+                    skipped |= bool(row["accepted"])
+                    continue
+                if not row["accepted"]:
+                    continue
+                row["accepted"] = False
+                row["deletion_sync"] = {
+                    "image_path": source._state["image_path"],
+                    "filter_name": source._state["filter_name"],
+                    "manifest_path": source.manifest_path.as_posix(),
+                }
+                changed_sources.add(key)
+                changed = True
+            if changed:
+                target._publish(state)
+                changed_images += 1
+            reviewed_images += int(skipped)
+        return {
+            "sources": len(changed_sources),
+            "images": changed_images,
+            "reviewed_images": reviewed_images,
+        }
+
+    def review(
+        self, *, isolated: bool | None = None, sync_deletions: bool = False,
+    ) -> None:
+        """Review the queue, optionally syncing saved standard-star deletions.
+
+        sync_deletions=True excludes the same field/source IDs in unreviewed
+        sessions in this queue and analysis root. Centers/radii and reviewed
+        sessions remain unchanged. Saving persists both regions and provenance.
+        """
         from ..interactive_ds9.region_reviewer import RegionReviewer
 
         try:
-            RegionReviewer(self.sessions, isolated=isolated).run()
+            RegionReviewer(
+                self.sessions, isolated=isolated, sync_deletions=sync_deletions,
+            ).run()
         finally:
             for session in self.sessions:
                 session._state = PhotometryRegions.load(

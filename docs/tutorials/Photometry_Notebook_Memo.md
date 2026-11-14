@@ -135,7 +135,7 @@ standard_regions = PhotometryRegions.generate_regions(
 )
 
 # Review and save the standard-star regions in interactive DS9.
-standard_regions.review()
+standard_regions.review(sync_deletions=True)
 ```
 
 每张图像使用自己的 header FWHM 和 centroid。默认 aperture radius 为
@@ -383,7 +383,7 @@ science_regions = PhotometryRegions.load_regions(
 随后重跑 photometry、zero points 和 calibration。此入口只恢复 region 关联，
 不序列化整个 `Sources`/`ObservationField`，也不恢复 kernel 的数值结果。
 缺文件会明确报错，不自动生成替代文件，不需要手工查 JSON。
-对象还在时，可直接再次调用 `standard_regions.review()` 或 `science_regions.review()`。
+对象还在时，可直接再次调用 `standard_regions.review(sync_deletions=True)` 或 `science_regions.review()`。
 
 ## 12. 正式 notebook 编写与验收记录
 
