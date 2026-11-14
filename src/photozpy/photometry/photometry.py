@@ -7,6 +7,8 @@ Main function:
 - Perform aperture photometry
 """
 from pathlib import Path
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
 from ..collection_manager import CollectionManager
 from astropy.nddata import CCDData
 from photutils.aperture import CircularAperture, ApertureStats, aperture_photometry, SkyCircularAperture, SkyCircularAnnulus
@@ -26,14 +28,30 @@ from astropy.table import QTable
 import logging
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from ..calibration._calibration_io import ImageInput
+    from ..sources import Sources
+    from .regions import PhotometryRegions, PhotometryRegionCollection
+
 
 class Photometry():
+    """Measure reviewed apertures with the original count/error equations.
 
-    def __init__(self, image_collection):
+    Refactored Sources use run_photometry(..., regions=...) with generated and
+    reviewed region sessions. Legacy callers remain supported by the original
+    path when regions is omitted and the supplied sources use the legacy API.
+    No zero-point calculation or photometric calibration is performed.
+    """
 
-        # refresh the full collection
-        self._image_collection = CollectionManager.refresh_collection(
-            image_collection, rescan=True)
+    def __init__(self, image_collection: "ImageInput") -> None:
+        """Keep the explicit input image selection without directory rescanning."""
+        self._image_collection = image_collection
+        self.phot_table = QTable()
+
+    @property
+    def results(self) -> QTable:
+        """Return a copy of the last completed batch's measurement table."""
+        return self.phot_table.copy(copy_data=True)
 
     @staticmethod
     def read_fwhm(image_path, keyword="FWHM"):
@@ -82,7 +100,7 @@ class Photometry():
 
     @staticmethod
     def estimate_mean_background(
-            image_array_data, annulus_aperture, clip_sigma=3, tolerance=0.1):
+            image_array_data, annulus_aperture, clip_sigma=3, tolerance=0.1, *, mask=None):
         """
         Estimate the mean background level within a background annulus,
         using sigma clipping and a mean–median consistency check.
@@ -109,6 +127,10 @@ class Photometry():
             |mean − median| > tolerance × sigma_ann, a warning
             is raised (default = 0.1).
 
+        mask : numpy.ndarray of bool or None, optional
+            Invalid image pixels to exclude from annulus statistics. The
+            sigma-clipped mean and original clipping recipe are unchanged.
+
         Returns
         -------
         mean_bkg : float
@@ -133,6 +155,7 @@ class Photometry():
         bkg_stats = ApertureStats(
             image_array_data,
             annulus_aperture,
+            mask=mask,
             sigma_clip=sigclip,
             sum_method="exact")
 
@@ -194,7 +217,7 @@ class Photometry():
 
         The variance in the average-stacked image (in electrons) is：
 
-        \sigma_{e,\mathrm{ap,sum}}^2 =
+        \sigma_{e,\mathrm{ap,avg}}^2 =
         \frac{1}{N_{\rm com}}\left[
             c_{e,\rm ap}
           + N_{\mathrm{ap}}\sigma_{\mathrm{readout}}^2
@@ -423,8 +446,86 @@ class Photometry():
             return SkyCircularAnnulus(
                 centers, r_in=regions[0].inner_radius, r_out=regions[0].outer_radius)
 
-    def run_photometry(self, sources, bkg_clip_sigma=3,
-                       src_detection_sigma=3, hdu=0, verbose=True):
+    def run_photometry(
+        self,
+        sources: "Sources | Sequence[Sources]",
+        bkg_clip_sigma: float = 3,
+        src_detection_sigma: float = 3,
+        hdu: int = 0,
+        verbose: bool = True,
+        *,
+        regions: "PhotometryRegions | PhotometryRegionCollection | Sequence[PhotometryRegions | PhotometryRegionCollection] | None" = None,
+        require_review: bool = True,
+    ) -> QTable | None:
+        """Measure saved aperture/annulus pairs and attach instrumental results.
+
+        Parameters
+        ----------
+        sources : Sources or sequence of Sources
+            Standards or science targets whose instrumental slots will be
+            updated. Reference and calibrated slots remain unchanged.
+            A tuple such as (standard_sources, sources) is combined internally
+            with shared records, so results are written back to both originals.
+        bkg_clip_sigma : float, optional
+            SigmaClip threshold for the existing mean-background estimator.
+        src_detection_sigma : float, optional
+            Detection and background-only upper-limit significance, default 3.
+        hdu : int, optional
+            Refactored region sessions require primary images (0).
+        verbose : bool, optional
+            Print the complete output table when True.
+        regions : PhotometryRegions, PhotometryRegionCollection, or sequence
+            Saved per-image files from generate/generate_regions and DS9 review.
+            Read circles/annuli by source ID with independent centers and radii;
+            no centroiding or FWHM scaling is repeated.
+            Supply (standard_regions, science_regions) for one unified run.
+        require_review : bool, optional
+            Require completed review records, default True. Explicitly disable
+            only for unattended measurements of generated regions.
+
+        Returns
+        -------
+        astropy.table.QTable
+            All source/filter measurements, counts, both original count errors,
+            magnitudes, significance, upper-limit flags and failure reasons.
+            Also available as results and phot_table. No files are written.
+
+        Notes
+        -----
+        Preserves the original estimate_source_region_error and counts2mag
+        calculation bodies. Uses net counts, not count rate, and average-stack
+        NCOMBINE. No automatic CCDData uncertainty, zero point or calibration is
+        used. Invalid/masked/truncated source apertures are reported as unusable
+        instead of estimating missing source flux. Background masks and sigma
+        clipping retain the original sum_aper_area definition for n_ann.
+        A finite non-detection's table error remains NaN as in counts2mag;
+        only its FilterMagnitude storage error uses the established -99 flag.
+        """
+        from ..sources import Sources
+
+        if regions is None:
+            if isinstance(sources, Sources) or (
+                isinstance(sources, Sequence) and all(isinstance(item, Sources) for item in sources)
+            ):
+                raise ValueError("Pass reviewed regions=standard_regions or regions=science_regions.")
+            return self._run_legacy_photometry(
+                sources, bkg_clip_sigma, src_detection_sigma, hdu, verbose,
+            )
+        from ._aperture_measurements import run_aperture_photometry
+
+        table = run_aperture_photometry(
+            self, sources, regions,
+            bkg_clip_sigma=bkg_clip_sigma,
+            src_detection_sigma=src_detection_sigma,
+            hdu=hdu, require_review=require_review,
+        )
+        self.phot_table = table
+        if verbose:
+            table.pprint_all()
+        return self.results
+
+    def _run_legacy_photometry(self, sources, bkg_clip_sigma=3,
+                               src_detection_sigma=3, hdu=0, verbose=True):
         """
         Does the aperture photometry on the skycoords.
 

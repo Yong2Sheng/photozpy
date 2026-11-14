@@ -28,13 +28,36 @@ jobs:
           condarc: |
             channels:
               - conda-forge
-              - defaults
+            channel_priority: strict
 
       # Install your package in editable mode; keep deps managed by conda/mamba
       - name: Install photozpy (editable, no deps)
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e . --no-deps
+        shell: micromamba-shell {0}
+
+      # check version of some packages for debugging purpose
+      - name: Show installed scientific package versions
+        run: |
+          python - <<'PY'
+          import importlib.metadata as metadata
+          import numpy
+
+          print("NumPy runtime:", numpy.__version__)
+
+          for package in (
+              "numpy",
+              "astropy",
+              "astropy-healpix",
+              "ccdproc",
+              "photutils",
+          ):
+              try:
+                  print(f"{package}: {metadata.version(package)}")
+              except metadata.PackageNotFoundError:
+                  print(f"{package}: NOT INSTALLED")
+          PY
         shell: micromamba-shell {0}
 
       - name: Lint (ruff)

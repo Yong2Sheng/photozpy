@@ -1,299 +1,509 @@
-"""
-Written by Yong Sheng at Clemson University, 2023 for the photozpy project.
-Advisor: Dr. Marco Ajello
-Other contributor(s):
+"""Build master calibration frames using the existing ccdproc combine recipe."""
 
-Main function:
-- Combine a series of registered images.
-- Check image types before combine.
-"""
+from __future__ import annotations
 
-from ccdproc import combine as ccdpro_combine
-from .headers import HeaderManipulation
-from ..collection_manager import CollectionManager
-from astropy.stats import mad_std
-import numpy as np
+from collections.abc import Callable
+import logging
+from numbers import Real
 from pathlib import Path
+import re
+from textwrap import fill
+from typing import Literal, TypeAlias
+
+from astropy.io import fits
+from astropy.nddata import CCDData
+from astropy.stats import mad_std
+from ccdproc import ImageFileCollection, combine as ccdpro_combine
+import numpy as np
+from numpy.typing import NDArray
+
+from ..telescope import Telescope
+from ._calibration_io import (
+    ImageInput, check_destinations, children, exposure, is_corrected, paths,
+    rebuild, refresh, select, validate_compatible, write_ccd,
+)
 
 
-class Combine():
+logger = logging.getLogger(__name__)
 
+
+ScaleFunction: TypeAlias = Callable[[NDArray], float | np.floating]
+CombinePlan: TypeAlias = tuple[
+    ImageFileCollection, list[Path], Path, str | None, str | None,
+]
+
+
+class Combine:
+    """Combine calibration frames separately within each child collection.
+
+    Parameters
+    ----------
+    image_collection : ImageFileCollection or ImageCollectionGroup
+        Working images with standardized IMTYPE, FILTER, and BUNIT headers.
+        Master files are selected by metadata, not by filename or OBJECT.
+    telescope : Telescope or None, optional
+        Refactored telescope used to resolve filter aliases. If omitted, FILTER
+        values must already use exactly matching canonical names.
+    overwrite : bool, optional
+        Allow replacement of existing master files. Default is False.
+
+    Notes
+    -----
+    The original combination recipe is retained: sigma-clipped average,
+    np.ma.median center, mad_std deviation, default 5-sigma thresholds, and
+    float32 calculation. Flat inputs are scaled by inverse median by default,
+    before sigma clipping so differing sky levels do not hide outliers.
+    A single input is copied without this multi-image scaling, as before.
+
+    Bias/Dark grouping uses IMTYPE, Flat uses FILTER, and registered Light uses
+    FIELD plus FILTER. Directory boundaries are never merged automatically.
+    Mixed correction states and different dark exposure times are rejected.
+
+    Methods return explicit selections including original images and new
+    masters, and update image_collection. Passing that result to Reduction
+    avoids relying on a snapshot refresh to discover newly created files.
+    Output is written as CCDData, not as a copy of unrelated FITS extensions.
     """
-    Combine different types of images.
-    """
 
-    def __init__(self, image_collection, telescope):
+    def __init__(
+        self,
+        image_collection: ImageInput,
+        telescope: Telescope | None = None,
+        *,
+        overwrite: bool = False,
+    ) -> None:
+        children(image_collection)
+        if telescope is not None and not isinstance(telescope, Telescope):
+            raise TypeError('telescope must be a refactored Telescope or None.')
+
+        self._image_collection: ImageInput = image_collection
+        self._telescope: Telescope | None = telescope
+        self._overwrite: bool = overwrite
+        self._master_paths: tuple[Path, ...] = ()
+
+    @property
+    def image_collection(self) -> ImageInput:
+        """Return working images plus masters from the latest successful call."""
+        return self._image_collection
+
+    @property
+    def master_paths(self) -> tuple[Path, ...]:
+        """Return master files written by the latest successful combine call."""
+        return self._master_paths
+
+    def preview_in_ds9(self) -> None:
+        """Browse masters from the latest successful call without moving files.
+
+        Start or reuse a dedicated DS9 window. Next/Previous browse one master
+        at a time; Quit closes the controls and leaves DS9 open. The notebook
+        waits for Quit. On macOS the controls use an isolated GUI process.
+        This works for Bias, Dark, Flat, and Light masters and does not repeat
+        combination or refresh/change the working collection.
         """
-        Init the instance.
+        from ..interactive_ds9.image_previewer import ImagePreviewer
+
+        if not self._master_paths:
+            raise ValueError('No completed combine batch is available for preview.')
+        ImagePreviewer(self._master_paths).run()
+
+    @staticmethod
+    def inv_median(a: NDArray) -> float | np.floating:
+        """Return the original inverse-median flat scale, rejecting invalid data."""
+        median = np.median(a)
+        if not np.isfinite(median) or median <= 0:
+            raise ValueError('Flat median must be positive and finite.')
+        return 1 / median
+
+    @staticmethod
+    def check_imtype(image_collection: ImageInput, imtype: str) -> bool:
+        """Check that every selected image has the requested IMTYPE.
+
+        Return False for empty selections. Unlike the old character-by-character
+        membership check, this checks the complete type string on every image.
+        """
+        image_paths = [path for child in children(image_collection) for path in paths(child)]
+        return bool(image_paths) and all(
+            fits.getheader(path).get('IMTYPE') == imtype for path in image_paths
+        )
+
+    def combine_bias_or_dark(
+        self,
+        image_type: Literal['Bias', 'Dark'],
+        method: str = 'sigma clip',
+        sigma_clip_low: float = 5,
+        sigma_clip_high: float = 5,
+        save_location: str | Path | None = None,
+        quite: bool = False,
+        *,
+        overwrite: bool | None = None,
+    ) -> ImageInput:
+        """Create one Master Bias or Master Dark per input child directory.
 
         Parameters
         ----------
-        image_collection: ccdproc.ImageFileCollection; the collection of images
-        telescope:
-        """
-
-        self._image_collection = CollectionManager.refresh_collection(
-            image_collection)
-        self._telescope = telescope
-
-    @staticmethod
-    def inv_median(a):
-        return 1 / np.median(a)
-
-    @staticmethod
-    def check_imtype(image_collection, imtype):
-        """
-        Check if the imtype of the image_collection is the same as the one we input.
-
-        Parameters
-        ----------
-        image_collection: ccdproc.ImageFileCollection; the collection of images
-        imtype: str; the value for IMTYPE header.
+        image_type : {'Bias', 'Dark'}
+            Raw image type to combine. Existing masters are not input frames.
+        method : str, optional
+            Only 'sigma clip' is supported, matching the implemented old recipe.
+        sigma_clip_low, sigma_clip_high : float, optional
+            Positive lower and upper clipping thresholds. Defaults are both 5.
+        save_location : str, Path, or None, optional
+            Destination directory; None or '' writes beside each child input.
+        quite : bool, optional
+            Suppress INFO output. The existing parameter name is retained.
+        overwrite : bool or None, optional
+            Override the constructor's overwrite policy for this call.
 
         Returns
         -------
-        final: boolean; True or False
+        ImageFileCollection or ImageCollectionGroup
+            Original working images and newly generated master files.
+
+        Raises
+        ------
+        ValueError
+            No inputs exist, shapes/units or correction states differ, dark
+            exposure times differ, or destination paths collide.
+        FileExistsError
+            A master exists and overwriting has not been enabled.
+
+        Notes
+        -----
+        Dark frames must have one common positive EXPTIME. This method does
+        not scale individual dark inputs before combining or subtract bias.
+        Apply bias correction before building a bias-subtracted Master Dark.
         """
+        if image_type not in ('Bias', 'Dark'):
+            raise ValueError('image_type must be Bias or Dark.')
 
-        headers_values = {"IMTYPE": imtype}
+        self._validate_method(method, sigma_clip_low, sigma_clip_high)
+        refresh(self._image_collection)
+        plans: list[CombinePlan] = []
 
-        imtype_value = HeaderManipulation.check_headers(
-            image_collection, **headers_values)
+        for child in children(self._image_collection):
+            image_list_to_combine: list[Path] = select(child, IMTYPE=image_type)
+            if not image_list_to_combine:
+                continue
 
-        return imtype_value
+            self._validate_inputs(image_list_to_combine)
+            if image_type == 'Dark':
+                exposures = [exposure(fits.getheader(path), path) for path in image_list_to_combine]
+                if len(set(exposures)) != 1:
+                    raise ValueError('Combine dark frames with one common EXPTIME.')
 
-    def combine_bias_or_dark(self, image_type, method="sigma clip",
-                             sigma_clip_low=5, sigma_clip_high=5, save_location="", quite=False):
-        """
-        Combine bias or dark images
+            destination = self._output_dir(child, save_location) / f'Master_{image_type}.fits'
+            plans.append((child, image_list_to_combine, destination, None, None))
+
+        return self._execute(
+            plans, image_type, sigma_clip_low, sigma_clip_high,
+            scale_function=None, quite=quite, overwrite=overwrite,
+        )
+
+    def combine_light_or_flat(
+        self,
+        image_type: Literal['Flat', 'Light'],
+        method: str = 'sigma clip',
+        scale_function: Literal['auto'] | ScaleFunction | None = 'auto',
+        sigma_clip_low: float = 5,
+        sigma_clip_high: float = 5,
+        save_location: str | Path | None = None,
+        quite: bool = False,
+        *,
+        overwrite: bool | None = None,
+    ) -> ImageInput:
+        """Combine Flat by FILTER or already registered Light by FIELD/FILTER.
 
         Parameters
         ----------
-        image_type; str; Bias or Dark
-        method:
-        sigma_clip_low
-        sigma_clip_high
+        image_type : {'Flat', 'Light'}
+            Type to combine. This method does not register light images.
+        method : str, optional
+            Only 'sigma clip' is supported.
+        scale_function : 'auto', callable, or None, optional
+            For Flat, 'auto' retains inverse-median scaling; a callable supplies
+            an explicit positive finite scale, and None disables input scaling.
+            Scaling is applied to each image before clipping. Single-image
+            groups are copied without scaling, as in the old implementation.
+            Light combinations are unscaled, preserving the original behavior.
+        sigma_clip_low, sigma_clip_high : float, optional
+            Positive clipping thresholds; defaults are both 5.
+        save_location : str, Path, or None, optional
+            Output directory; None or '' writes beside each child input.
+        quite : bool, optional
+            Suppress INFO output; existing parameter spelling retained.
+        overwrite : bool or None, optional
+            Override the constructor's overwrite policy.
 
         Returns
         -------
+        ImageFileCollection or ImageCollectionGroup
+            Working images with new masters included explicitly.
+
+        Notes
+        -----
+        Multi-image Flat/Light products retain float32 conversion and removal
+        of uncertainty. Flat masks are removed as before; Light masks are kept
+        so registration footprints remain excluded and uncovered output pixels
+        stay identifiable. No new uncertainty model is added.
+        Flat correction later uses ccdproc's mean normalization independently
+        of this per-input stacking scale. OBJECT is not used for grouping.
+
+        Multi-image flats are normalized in memory one filter group at a time
+        before being passed to ccdproc. Unlike passing scale= to ccdproc 2.5.1,
+        this makes rejection operate on normalized pixels. No normalized
+        intermediate FITS files are written or raw inputs modified.
         """
+        if image_type not in ('Flat', 'Light'):
+            raise ValueError('image_type must be Flat or Light.')
+        if scale_function != 'auto' and scale_function is not None and not callable(scale_function):
+            raise TypeError("scale_function must be 'auto', callable, or None.")
 
-        # refresh the full collection
-        self._image_collection = CollectionManager.refresh_collection(
-            self._image_collection, rescan=True)
+        self._validate_method(method, sigma_clip_low, sigma_clip_high)
+        refresh(self._image_collection)
+        plans: list[CombinePlan] = []
 
-        if save_location == "":
-            save_location = self._image_collection.location
+        for child in children(self._image_collection):
+            selected = select(child, IMTYPE=image_type)
+            groups: dict[tuple[str | None, str], list[Path]] = {}
 
-        # Get the collection to combine and the object names
-        collection_to_combine = CollectionManager.filter_collection(
-            self._image_collection, **{"IMTYPE": [image_type]})
+            for path in selected:
+                header = fits.getheader(path)
+                if not header.get('FILTER'):
+                    raise ValueError(f'{path.name}: missing FILTER.')
+                filter_name = str(header['FILTER']).strip()
+                if self._telescope is not None:
+                    filter_name = self._telescope.resolve_filter_alias(filter_name)
 
-        # Get the object names (Bias or Dark)
-        object_names = HeaderManipulation.get_header_values(
-            collection_to_combine,
-            header="object")  # It seems only the lower cases work for the header values
-        object_names = [*set(object_names)]  # remove duplicate elements
-        # note that object_names includes all the objects! (targets, bias ,dark
-        # and flat)
+                field_name = None
+                if image_type == 'Light':
+                    if not header.get('FIELD'):
+                        raise ValueError(f'{path.name}: missing FIELD.')
+                    field_name = str(header['FIELD'])
 
-        for object_name in object_names:  # note that bias and dark don't have filters
-            # this is the list of the absolute path to the fits images to be
-            # combine
-            image_list_to_combine = list(
-                collection_to_combine.files_filtered(
-                    object=object_name, include_path=True))
-            # This is the list of the file names
-            image_filenames = list(
-                collection_to_combine.files_filtered(
-                    object=object_name, include_path=False))
-            image_number = len(image_filenames)
+                groups.setdefault((field_name, filter_name), []).append(path)
 
-            if image_number == 0:
-                print(f"WARNING: No {object_name} found! Skipping......")
+            for (field_name, filter_name), image_list_to_combine in groups.items():
+                self._validate_inputs(image_list_to_combine)
+                if image_type == 'Light' and len(image_list_to_combine) > 1:
+                    self._validate_registration(image_list_to_combine)
+                label = 'Flat' if field_name is None else self._safe_name(field_name)
+                destination = (
+                    self._output_dir(child, save_location)
+                    / f'Master_{label}_{self._safe_name(filter_name)}.fits'
+                )
+                plans.append((child, image_list_to_combine, destination, field_name, filter_name))
 
-            elif image_number == 1:
-                print(
-                    f"Only one {object_name} image! Just copying and renaming the file.")
+        scale_function_ = self.inv_median if scale_function == 'auto' else scale_function
+        return self._execute(
+            plans, image_type, sigma_clip_low, sigma_clip_high,
+            scale_function=scale_function_, quite=quite, overwrite=overwrite,
+        )
 
-                for hdu in collection_to_combine.hdus(
-                        save_with_name="_master", save_location=save_location, overwrite=True):
-                    hdu.header["IMTYPE"] = f"Master {image_type}"
-                    hdu.header["NCOMBINE"] = int(image_number)
+    @staticmethod
+    def _validate_method(method: str, low: float, high: float) -> None:
+        """Reject unimplemented methods and invalid thresholds before writing."""
+        if method != 'sigma clip':
+            raise ValueError("Only method='sigma clip' is implemented.")
+        if not np.isfinite(low) or not np.isfinite(high) or low <= 0 or high <= 0:
+            raise ValueError('Sigma-clipping thresholds must be positive and finite.')
 
-                # get the filename stem: crab_sdss_g.fits --get--> crab_sdss_g
-                fname_stem = Path(image_list_to_combine[0]).stem
-                fname_suffix = Path(image_list_to_combine[0]).suffix
-                # the path to the saved file
-                name_path = Path(save_location) / \
-                    f"{fname_stem}_master{fname_suffix}"
-                new_name_path = name_path.with_name(
-                    f"Master_{object_name}{fname_suffix}")  # the new path
-                # rename the file, notice that you have to use the full path to
-                # rename, not just the file name
-                name_path.rename(new_name_path)
+    @staticmethod
+    def _validate_inputs(image_paths: list[Path]) -> None:
+        """Check geometry, units, and consistent prior calibration states."""
+        validate_compatible(image_paths)
+        for keyword in ('BIASCORR', 'DARKCORR', 'FLATCORR'):
+            states = {is_corrected(fits.getheader(path), keyword) for path in image_paths}
+            if len(states) > 1:
+                raise ValueError(f'Cannot combine mixed {keyword} states.')
 
-            elif image_number > 1:
-                if not quite:
-                    print(
-                        f"Using {image_filenames} to combine the master {object_name} image!")
-                if method == "sigma clip":
-                    combined = ccdpro_combine(image_list_to_combine,
-                                              method="average",
-                                              sigma_clip=True, sigma_clip_low_thresh=sigma_clip_low, sigma_clip_high_thresh=sigma_clip_high,
-                                              sigma_clip_func=np.ma.median, sigma_clip_dev_func=mad_std, dtype=np.float32)
-                elif method == "minmax clip":
-                    raise ValueError("This function isn't ready yet!")
+    @staticmethod
+    def _validate_registration(image_paths: list[Path]) -> None:
+        """Require a shared, explicitly tracked grid for multi-Light stacking.
 
-                else:
+        Registration outputs carry ALIGN, REGREF, and REFHASH. Reject a mix
+        of unregistered images or different references rather than averaging
+        incompatible pixel coordinates. Single-image copies need no alignment.
+        """
+        reference_ids: set[tuple[str, str]] = set()
+        for path in image_paths:
+            header = fits.getheader(path)
+            with fits.open(path, memmap=True) as hdul:
+                if header.get('CRCORR') == 'Yes' and 'MASK' in hdul and 'CMASK' not in hdul:
                     raise ValueError(
-                        "Unsupported combining method! What supported now is only sigma clip!")
+                        f'{path.name}: legacy cosmic-ray MASK; restore pre-registration '
+                        'copies and use separate CMASK detections before combining.'
+                    )
+            if (
+                header.get('ALIGN') not in ('Reference', 'Registered')
+                or not header.get('REGREF')
+                or not header.get('REFHASH')
+            ):
+                raise ValueError(f'{path.name}: register Light images before combining.')
+            reference_ids.add((header['REGREF'], header['REFHASH']))
 
-                combined.meta["IMTYPE"] = f"Master {image_type}"
-                combined.meta["NCOMBINE"] = int(image_number)
-                combined.write(
-                    Path(save_location) /
-                    f'Master_{object_name}.fits',
-                    overwrite=True)
-                print(f"{image_type} combined!")
-                print("----------------------------------------\n")
+        if len(reference_ids) != 1:
+            raise ValueError('Light images use different registration references.')
 
-        # refresh the full collection
-        self._image_collection = CollectionManager.refresh_collection(
-            self._image_collection, rescan=True)
+    @staticmethod
+    def _safe_name(value: str) -> str:
+        """Keep metadata labels from becoming filesystem paths."""
+        return re.sub(r'[^A-Za-z0-9_.\-\x27]', '_', value)
 
-        return
+    @staticmethod
+    def _output_dir(
+        child: ImageFileCollection, save_location: str | Path | None,
+    ) -> Path:
+        """Use a requested output directory or the child's existing location."""
+        if save_location in (None, ''):
+            return Path(child.location or '.').resolve()
+        return Path(save_location).expanduser().resolve()
 
-    def combine_light_or_flat(self, image_type, method="sigma clip", scale_function="auto",
-                              sigma_clip_low=5, sigma_clip_high=5, save_location="", quite=False):
+    @staticmethod
+    def _normalize_flats(
+        image_paths: list[Path],
+        scale_function: ScaleFunction,
+    ) -> list[CCDData]:
+        """Scale one filter's calibrated flats before outlier rejection.
+
+        Read each CCDData and evaluate the same caller-selected scaling
+        function on its complete image array. Apply that dimensionless scalar
+        through CCDData arithmetic, preserving metadata and propagating any
+        existing mask/uncertainty into the temporary normalized inputs.
+
+        Only in-memory copies are changed. The final multi-flat output still
+        follows the existing float32/no-mask/no-uncertainty policy. Memory must
+        accommodate the normalized inputs for one filter group.
         """
-        Combine light or flat images
+        normalized_flats: list[CCDData] = []
 
-        Parameters
-        ----------
-        image_type; str; Flat or Light
+        for path in image_paths:
+            ccd: CCDData = CCDData.read(path)
+            scale_factor = scale_function(ccd.data)
 
-        Returns
-        -------
+            if (
+                not isinstance(scale_factor, Real)
+                or not np.isfinite(scale_factor)
+                or scale_factor <= 0
+            ):
+                raise ValueError(
+                    f'{path.name}: flat scale must be a positive finite scalar.'
+                )
+
+            normalized: CCDData = ccd.multiply(scale_factor)
+            normalized.meta = ccd.meta.copy()
+            normalized_flats.append(normalized)
+
+        return normalized_flats
+
+    def _execute(
+        self,
+        plans: list[CombinePlan],
+        image_type: str,
+        sigma_clip_low: float,
+        sigma_clip_high: float,
+        *,
+        scale_function: ScaleFunction | None,
+        quite: bool,
+        overwrite: bool | None,
+    ) -> ImageInput:
+        """Report exact inputs, run the original recipe, and publish masters.
+
+        Unless quite=True, log the count, wrapped input filenames, output
+        filename, and completion at INFO level. Group titles identify FILTER
+        and FIELD when present; separators and blank lines distinguish groups.
+        Logging handlers and levels are configured by the caller.
         """
+        if not plans:
+            raise ValueError(f'No {image_type} frames selected.')
 
-        # refresh the full collection
-        self._image_collection = CollectionManager.refresh_collection(
-            self._image_collection, rescan=True)
+        replace = self._overwrite if overwrite is None else overwrite
+        check_destinations([plan[2] for plan in plans], replace)
+        additions: dict[int, list[Path]] = {}
 
-        if save_location == "":
-            save_location = self._image_collection.location
+        for child, image_list_to_combine, destination, field_name, filter_name in plans:
+            image_number: int = len(image_list_to_combine)
+            combined: CCDData
 
-        # first select image types (Flat or Light)
-        collection_to_combine = CollectionManager.filter_collection(
-            self._image_collection, **{"IMTYPE": [image_type]})
+            if not quite:
+                action = 'Copying' if image_number == 1 else 'Combining'
+                frame_label = 'frame' if image_number == 1 else 'frames'
+                group_label: str = image_type
+                if filter_name is not None:
+                    group_label += f' | FILTER={filter_name}'
+                if field_name is not None:
+                    group_label += f' | FIELD={field_name}'
 
-        # Get the object names (Flat or various target names)
-        object_names = HeaderManipulation.get_header_values(
-            collection_to_combine, header="object")  # It seems only the lower cases work
-        object_names = [*set(object_names)]  # remove duplicate elements
-        print(f"The objects to be combined are {object_names}")
+                input_names: str = fill(
+                    ', '.join(path.name for path in image_list_to_combine),
+                    width=88,
+                    initial_indent='  ',
+                    subsequent_indent='  ',
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+                logger.info(
+                    '%s\n%s\n%s %d %s %s → %s\nInput files:\n%s',
+                    group_label, '-' * 64,
+                    action, image_number, image_type, frame_label,
+                    destination.name, input_names,
+                )
 
-        for object_name in object_names:
-            collection_object = CollectionManager.filter_collection(
-                self._image_collection, **{"object": [object_name]})
-            filters = CollectionManager.get_header_values(
-                collection_object, "FILTER", unique=True)
-            for filter in filters:
-                # get the image collection with specific filter and object name
-                collection_temp = CollectionManager.filter_collection(
-                    collection_to_combine, **{"OBJECT": [object_name], "FILTER": [filter]})
-                # this is the list of the absolute path to the fits images to
-                # be combined
-                image_list_to_combine = list(
-                    collection_temp.files_filtered(
-                        include_path=True))
-                # this is the list of file names of the images to be combined
-                image_filenames = list(collection_temp.files_filtered())
-                image_number = len(image_filenames)
+            # Keep the single-image copy path. For multiple flats, apply the
+            # chosen scale before clipping; other recipes retain their order.
+            if image_number == 1:
+                combined = CCDData.read(image_list_to_combine[0])
 
-                if image_number == 0:
-                    print(
-                        f"WARNING: No {object_name} in {filter} filter found! Skipping......")
+            elif image_type == 'Flat':
+                flat_inputs: list[Path] | list[CCDData] = image_list_to_combine
+                if scale_function is not None:
+                    flat_inputs = self._normalize_flats(
+                        image_list_to_combine, scale_function,
+                    )
 
-                elif image_number == 1:
-                    print(
-                        f"Only one {object_name} image in {filter}! Just copying and renaming the file.")
+                combined = ccdpro_combine(
+                    flat_inputs,
+                    method='average',
+                    sigma_clip=True,
+                    sigma_clip_low_thresh=sigma_clip_low,
+                    sigma_clip_high_thresh=sigma_clip_high,
+                    sigma_clip_func=np.ma.median,
+                    sigma_clip_dev_func=mad_std,
+                    dtype=np.float32,
+                )
+                # Release this filter's in-memory inputs before the next group.
+                del flat_inputs
 
-                    # construct the headers and values to write
-                    header_dict = {"IMTYPE": f"Master {image_type}",
-                                   "NCOMBINE": int(image_number)}
-                    if image_type == "Light":
-                        header_dict["RDNOISE"] = self._telescope.ccd_rdnoise.value
-                        header_dict["GAIN"] = self._telescope.ccd_gain.value
+            else:
+                combined = ccdpro_combine(
+                    image_list_to_combine,
+                    method='average',
+                    sigma_clip=True,
+                    sigma_clip_low_thresh=sigma_clip_low,
+                    sigma_clip_high_thresh=sigma_clip_high,
+                    sigma_clip_func=np.ma.median,
+                    sigma_clip_dev_func=mad_std,
+                    dtype=np.float32,
+                )
 
-                    HeaderManipulation.edit_headers_with_fitsio(collection_temp,
-                                                                save_location=save_location,
-                                                                additional_name="_master",
-                                                                **header_dict)
+            combined.meta['IMTYPE'] = f'Master {image_type}'
+            combined.meta['NCOMBINE'] = image_number
+            if filter_name is not None:
+                combined.meta['FILTER'] = filter_name
+            if field_name is not None:
+                combined.meta['FIELD'] = field_name
 
-                    # get the filename stem: crab_sdss_g.fits --get-->
-                    # crab_sdss_g, it only contains one fits file
-                    fname_stem = Path(image_list_to_combine[0]).stem
-                    # get the filename suffix: crab_sdss_g.fits --get--> .fits
-                    fname_suffix = Path(image_list_to_combine[0]).suffix
-                    # the path to the copied file
-                    name_path = Path(save_location) / \
-                        f"{fname_stem}_master{fname_suffix}"
-                    new_name_path = name_path.with_name(
-                        f"Master_{object_name}_{filter}{fname_suffix}")  # the new path
-                    # rename the file, notice that you have to use the full
-                    # path to rename, not just the file name
-                    name_path.rename(new_name_path)
-                    print(
-                        "----------------------------------------------------------\n")
-
-                elif image_number > 1:
-                    print(
-                        f"Using {image_filenames} to combine the master {object_name} image in {filter} filter!")
-                    if method == "sigma clip":
-                        if image_type == "Flat":
-                            if scale_function == "auto":
-                                scale_function_ = Combine.inv_median
-
-                            combined = ccdpro_combine(image_list_to_combine,
-                                                      method="average", scale=scale_function_,
-                                                      sigma_clip=True, sigma_clip_low_thresh=sigma_clip_low, sigma_clip_high_thresh=sigma_clip_high,
-                                                      sigma_clip_func=np.ma.median, sigma_clip_dev_func=mad_std, dtype=np.float32)
-
-                        elif image_type == "Light":
-                            combined = ccdpro_combine(image_list_to_combine,
-                                                      method="average",
-                                                      sigma_clip=True, sigma_clip_low_thresh=sigma_clip_low, sigma_clip_high_thresh=sigma_clip_high,
-                                                      sigma_clip_func=np.ma.median, sigma_clip_dev_func=mad_std, dtype=np.float32)
-                    elif method == "minmax clip":
-                        raise ValueError("This function isn't ready yet!")
-
-                    else:
-                        raise ValueError(
-                            "Unsupported combining method! What supported now is only sigma clip!")
-
-                    combined.meta["IMTYPE"] = f"Master {image_type}"
-                    combined.meta["NCOMBINE"] = int(image_number)
-                    if image_type == "Light":
-                        rdnoise = combined.meta["RDNOISE"]
-                        combined.meta["RDNOISE"] = rdnoise
-                        gain = combined.meta["GAIN"]
-                        # the gain should remain the same
-                        combined.meta["GAIN"] = gain
-                    combined.data = combined.data.astype(np.float32)  # float32 is enough precision
-                    combined.uncertainty = None  # no need to track uncertainty here
+            if image_number > 1 and image_type in ('Flat', 'Light'):
+                combined.data = combined.data.astype(np.float32)
+                combined.uncertainty = None
+                if image_type == 'Flat':
                     combined.mask = None
-                    combined.write(
-                        save_location /
-                        f"Master_{object_name}_{filter}.fits",
-                        overwrite=True)
-                    print(f"{object_name} in {filter} filter combined!")
-                    print(
-                        "----------------------------------------------------------\n")
 
-        # refresh the full collection
-        self._image_collection = CollectionManager.refresh_collection(
-            self._image_collection, rescan=True)
+            write_ccd(combined, destination, overwrite=replace)
+            additions.setdefault(id(child), []).append(destination)
 
-        return
+            if not quite:
+                logger.info('Master written successfully.\n')
+
+        self._image_collection = rebuild(self._image_collection, additions=additions)
+        self._master_paths = tuple(plan[2] for plan in plans)
+        return self._image_collection

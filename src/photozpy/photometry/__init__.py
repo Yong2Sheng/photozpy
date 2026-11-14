@@ -1,4 +1,10 @@
-from .source_detection import SourceDetection
-from .photometry import Photometry, SwiftPhotometry
+"""Public interfaces for refactored image measurements.
 
-__all__ = ["SourceDetection", "Photometry", "SwiftPhotometry"]
+Legacy source detection and photometry implementations remain in their modules;
+do not import their unrefactored dependencies during FWHM measurement.
+"""
+
+from .fwhm import FWHM
+from .regions import PhotometryRegions, PhotometryRegionCollection
+
+__all__ = ["FWHM", "PhotometryRegions", "PhotometryRegionCollection"]

@@ -1,297 +1,438 @@
-# from .base_source_info import BaseSourceInfo
-# from .magnitude_info import MagnitudeInfo
-from itertools import product
-import pandas as pd
-import astropy.units as u
-from astropy.coordinates import SkyCoord
-import numpy as np
-from .base_source_info import BaseSourceInfo
-import logging
-logger = logging.getLogger(__name__)
+"""Associate source metadata with optional photometric measurements."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Iterator
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, Self, TypeAlias
+
+from .filter_magnitude import FilterMagnitude
+from .source_info import SourceInfo, SourceRole, VALID_SOURCE_ROLES
+
+if TYPE_CHECKING:
+    from matplotlib.figure import Figure
+    from pandas import DataFrame
+
+    from ._zero_points import _ZeroPointStatistics
 
 
-class Sources():
+MagnitudeKind: TypeAlias = Literal["instrumental", "reference", "calibrated"]
+MAGNITUDE_KINDS = ("instrumental", "reference", "calibrated")
+SourceKey: TypeAlias = tuple[str, str]
 
-    def __init__(self, *sources):
-        """
-        Parameters
-        ----------
-        sources : photozpy.new_sources.base_source_info.BaseSourceInfo
 
-        """
+class Sources:
+    """Collect source definitions and their optional magnitude results.
 
-        self._sources = sources
-        self._source_names = [source.source_name for source in self._sources]
-        if not Sources.check_uniqueness(
-                self._source_names):  # check if there are sources with same name
-            logger.error(
-                "You have at least two sources that have the same source name!")
+    Parameters
+    ----------
+    *source_infos : SourceInfo
+        Definitions of the sources to collect. Each (field name, source name)
+        pair must be unique. Empty collections are allowed so filtering can
+        return an empty result.
+
+    Notes
+    -----
+    Each source starts with three undefined results (``None``): instrumental,
+    reference/catalog, and calibrated magnitudes. A FilterMagnitude may itself
+    contain NaN for individual filters; this differs from an absent result.
+
+    Integer indexing, name lookup, slicing, filtering, and iteration all return
+    Sources objects, including single-source collections. These selections
+    share measurement records with their parent: setting or clearing a result
+    through either collection is visible through the other. Metadata and
+    FilterMagnitude objects are stored by reference, without copying.
+
+    Photometry is performed separately. Explicit zero-point, diagnostic plotting,
+    and target-calibration methods operate on the stored results, without
+    converting magnitude systems. Setting a result alone never calibrates it.
+    """
+
+    def __init__(self, *source_infos: SourceInfo) -> None:
+        self._source_infos = tuple(source_infos)
+        self._zero_point_statistics: _ZeroPointStatistics | None = None
+        self._magnitudes: dict[
+            SourceKey, dict[MagnitudeKind, FilterMagnitude | None]
+        ] = {}
+
+        for info in self._source_infos:
+            if not isinstance(info, SourceInfo):
+                raise TypeError(
+                    "Each source must be a SourceInfo object. "
+                    "For an iterable, use Sources.from_list(source_infos)."
+                )
+            key = self._key(info)
+            if key in self._magnitudes:
+                raise ValueError(
+                    f"Duplicate source in observation field: {key!r}."
+                )
+            self._magnitudes[key] = {
+                kind: None for kind in MAGNITUDE_KINDS
+            }
+
+    @staticmethod
+    def _key(info: SourceInfo) -> SourceKey:
+        return (info.observation_field.field_name, info.source_name)
 
     @classmethod
-    def from_list(cls, source_list):
-
-        return cls(*source_list)
+    def from_list(cls, source_infos: Iterable[SourceInfo]) -> Self:
+        """Create a collection from an iterable of source definitions."""
+        return cls(*source_infos)
 
     @classmethod
-    def from_csv(cls, csv_path, telescope, units=(u.hourangle, u.deg)):
+    def combine(cls, *collections: Sources) -> Self:
+        """Combine collections while sharing their existing measurement records.
 
-        df = pd.read_csv(csv_path, sep=",")
-
-        source_list = []
-
-        for index, row in df.iterrows():
-
-            if row["ra"] is not np.nan:
-                _skycoord = SkyCoord(ra=[row["ra"]],
-                                     dec=[row["dec"]],
-                                     unit=units)
-            else:
-                _skycoord = None
-
-            _source_info = BaseSourceInfo(source_name=row["source_name"],
-                                          telescope=telescope,
-                                          source_type=row["source_type"],
-                                          skycoord=_skycoord,
-                                          file_pattern=row["file_pattern"],
-                                          magnitudes=None)
-            source_list += [_source_info]
-
-        return cls(*source_list)
-
-    @staticmethod
-    def check_uniqueness(in_list):
-
-        length = len(in_list)
-
-        idx = 0
-
-        while idx <= length - 2:
-
-            if in_list[idx] in in_list[idx + 1:]:
-                return False
-            else:
-                idx += 1
-        return True
-
-    @property
-    def nsources(self):
-        return len(self._sources)
-
-    @property
-    def coords(self):
-        return [i.skycoord for i in self._sources]
-
-    @property
-    def source_names(self):
-        return self._source_names
-
-    @property
-    def targets(self):
-        return self.filter_sources(source_type="target")
-
-    @property
-    def target_names(self):
-        return [i.source_name for i in self.targets]
-
-    @property
-    def target_coords(self):
-        return [i.skycoord for i in self.targets]
-
-    @property
-    def standard_stars(self):
-        return self.filter_sources(source_type="standard star")
-
-    @property
-    def standard_star_names(self):
-        return [i.source_name for i in self.standard_stars]
-
-    @property
-    def standard_star_coords(self):
-        return [i.skycoord for i in self.standard_stars]
-
-    @property
-    def sources(self):
-        return self._sources
-
-    @property
-    def telescope(self):
-
-        source1 = self._sources[0]
-
-        for source in self._sources[1:]:
-            if source1.telescope != source.telescope:
-                raise ValueError("The telescope is the sources are different!")
-
-        return source1.telescope
-
-    @staticmethod
-    def unwarp_dictionary(dictionary):
+        Preserve input/source order and all three result slots. Updating the
+        combined view updates the original collections, just like a selection.
+        Repeated selections of the same shared record are deduplicated. Separate
+        records claiming the same (field_name, source_name) raise ValueError
+        instead of arbitrarily choosing one owner's results. Source roles may
+        coexist within a field; role is not part of the source identity.
         """
-        Unwarp a dictionary to produce a dictionary list whose element is a dictionary that contains all the combinations of
-        values for the headers.
-
-        Parameters
-        ----------
-        dictionary: dict; the input dictionary
-
-        Returns
-        -------
-        dict_list: list; the list of all dictionaries that exhausts all the combination of the values.
-        """
-
-        # make sure all the values are lists instead of strings or numbers
-        for header, value in dictionary.items():
-            if not isinstance(value, list):
-                dictionary[header] = [value]
-
-        # get all the combinations of values from different headers
-        values = list(product(*list(dictionary.values())))
-
-        headers = list(dictionary.keys())
-
-        dict_list = []
-        for i in values:
-            # assemble headers and values. Note that headers are always the
-            # same. We just iterate through the combination of the values.
-            dict_ = dict(zip(headers, i))
-            dict_list += [dict_]
-
-        return dict_list
-
-    @staticmethod
-    def _filter_dict(dictionary, **headers_values):
-        """
-        Check if the headers_values match the ones in dictionary.
-        Return False if there is more than one that do not match.
-        Return True only if all the key and values match.
-
-        dictionary = {'source_type': 'target', 'source_name': 'PKS'}
-        headers_values = {"source_type": "target", 'source_name': 'PKS'}
-        Will return True
-        """
-
-        for key, value in headers_values.items():
-
-            if key not in dictionary.keys(
-            ):  # check if the keys in headers_values are also in the dictionary
-                logger.warning("The keys of the dictionary do not match!")
-                return False
-
-            else:
-                if dictionary[key] != value:
-                    return False
-
-        return True
-
-    def filter_sources(self, **headers_values):
-        """
-        Find the sources that match the keys and values in headers_values.
-        """
-
-        dict_filters = Sources.unwarp_dictionary(headers_values)
-
-        filtered_sources = []
-
-        for source in self._sources:
-
-            for dict_filter in dict_filters:
-
-                if Sources._filter_dict(source.source_dict, **dict_filter):
-                    filtered_sources += [source]
-
-        return filtered_sources
+        infos: list[SourceInfo] = []
+        records: dict[SourceKey, dict[MagnitudeKind, FilterMagnitude | None]] = {}
+        for collection in collections:
+            if not isinstance(collection, Sources):
+                raise TypeError("Each collection must be a Sources object.")
+            for info in collection.source_infos:
+                key = cls._key(info)
+                record = collection._magnitudes[key]
+                if key in records:
+                    if records[key] is not record:
+                        raise ValueError(f"Conflicting independent source records: {key!r}.")
+                    continue
+                infos.append(info)
+                records[key] = record
+        combined = cls(*infos)
+        combined._magnitudes = records
+        return combined
 
     @property
-    def zpoints(self):
-        try:
-            self._zpoints
-        except AttributeError:
-            return self.calculate_zpoints()
+    def source_infos(self) -> tuple[SourceInfo, ...]:
+        """Return source metadata in collection order."""
+        return self._source_infos
+
+    @property
+    def source_names(self) -> tuple[str, ...]:
+        """Return names in order; names may repeat across different fields."""
+        return tuple(info.source_name for info in self._source_infos)
+
+    @property
+    def nsources(self) -> int:
+        """Return the number of sources (also available through len)."""
+        return len(self)
+
+    @property
+    def source_info(self) -> SourceInfo:
+        """Return metadata when this collection contains exactly one source."""
+        return self.get_info()
+
+    def __len__(self) -> int:
+        return len(self._source_infos)
+
+    def __repr__(self) -> str:
+        if len(self) != 1:
+            return (
+                f"Sources(nsources={len(self)}, "
+                f"source_names={self.source_names!r})"
+            )
+
+        info = self._source_infos[0]
+        coordinates = info.source_coordinate.icrs.to_string(
+            "hmsdms", precision=2, pad=True, sep=":"
+        )
+        results = self._magnitudes[self._key(info)]
+        statuses = ", ".join(
+            f"{kind}={'undefined' if results[kind] is None else 'defined'}"
+            for kind in MAGNITUDE_KINDS
+        )
+        return (
+            "Sources(\n"
+            f"  source_name={info.source_name!r},\n"
+            f"  coordinates (ICRS): {coordinates},\n"
+            f"  magnitudes: {statuses}\n"
+            ")"
+        )
+
+    def __iter__(self) -> Iterator[Self]:
+        """Iterate over single-source collections sharing these results."""
+        for index in range(len(self)):
+            yield self[index]
+
+    def __getitem__(self, index: int | slice | str) -> Self:
+        """Select by position, slice, or an unambiguous source name.
+
+        Missing names raise KeyError. Ambiguous names raise ValueError; use
+        ``for_field(field_name)[source_name]`` to disambiguate.
+        """
+        if isinstance(index, str):
+            infos = (self.get_info(index),)
+        elif isinstance(index, slice):
+            infos = self._source_infos[index]
+        elif isinstance(index, int):
+            infos = (self._source_infos[index],)
         else:
-            return self._zpoints
+            raise TypeError("Source index must be an integer, slice, or name.")
+        return self._select(infos)
 
-    def calculate_zpoints(self, clip_sigma=3):
+    def _select(self, infos: Iterable[SourceInfo]) -> Self:
+        selected = type(self)(*infos)
+        selected._magnitudes = {
+            self._key(info): self._magnitudes[self._key(info)]
+            for info in selected.source_infos
+        }
+        return selected
+
+    def get_info(
+        self,
+        source_name: str | None = None,
+        *,
+        field_name: str | None = None,
+    ) -> SourceInfo:
+        """Resolve one source, optionally restricting its observation field.
+
+        Omitting source_name is useful for a single-source collection.
+        No match raises KeyError; more than one match raises ValueError.
         """
-        It only works with the case that one standard star image in all the sources
+        if source_name is not None and not isinstance(source_name, str):
+            raise TypeError("source_name must be a string or None.")
+        if field_name is not None and not isinstance(field_name, str):
+            raise TypeError("field_name must be a string or None.")
+        matches = [
+            info for info in self._source_infos
+            if (source_name is None or info.source_name == source_name)
+            and (field_name is None
+                 or info.observation_field.field_name == field_name)
+        ]
+        if not matches:
+            raise KeyError(
+                f"No source matches name={source_name!r}, field={field_name!r}."
+            )
+        if len(matches) != 1:
+            raise ValueError(
+                "Selection is ambiguous; specify source_name and, "
+                "if necessary, field_name to select exactly one source."
+            )
+        return matches[0]
+
+    def for_field(self, field_name: str) -> Self:
+        """Select sources with the given observation-field name."""
+        if not isinstance(field_name, str):
+            raise TypeError("field_name must be a string.")
+        return self._select(
+            info for info in self._source_infos
+            if info.observation_field.field_name == field_name
+        )
+
+    def by_role(self, source_role: SourceRole) -> Self:
+        """Select science or standard sources without changing their order."""
+        if source_role not in VALID_SOURCE_ROLES:
+            raise ValueError("source_role must be 'science' or 'standard'.")
+        return self._select(
+            info for info in self._source_infos
+            if info.source_role == source_role
+        )
+
+    @staticmethod
+    def _check_kind(kind: MagnitudeKind) -> None:
+        if kind not in MAGNITUDE_KINDS:
+            raise ValueError(
+                "kind must be 'instrumental', 'reference', or 'calibrated'."
+            )
+
+    def get_magnitudes(
+        self,
+        *,
+        kind: MagnitudeKind,
+        source_name: str | None = None,
+        field_name: str | None = None,
+    ) -> FilterMagnitude | None:
+        """Return a source's selected result, or None when not yet defined."""
+        self._check_kind(kind)
+        info = self.get_info(source_name, field_name=field_name)
+        return self._magnitudes[self._key(info)][kind]
+
+    def set_magnitudes(
+        self,
+        *,
+        kind: MagnitudeKind,
+        magnitudes: FilterMagnitude | None,
+        source_name: str | None = None,
+        field_name: str | None = None,
+    ) -> None:
+        """Attach or replace a result; pass None to clear it.
+
+        The measurement must use the exact Telescope instance associated with
+        the source's observation field. Instrumental results must be labeled
+        'instrumental'; reference and calibrated results must be AB or Vega.
+        These checks do not convert systems or calculate any values.
         """
+        self._check_kind(kind)
+        info = self.get_info(source_name, field_name=field_name)
+        if magnitudes is not None:
+            if not isinstance(magnitudes, FilterMagnitude):
+                raise TypeError("magnitudes must be a FilterMagnitude or None.")
+            if magnitudes.telescope is not info.observation_field.telescope:
+                raise ValueError(
+                    "Magnitudes must use the observation field's Telescope "
+                    "instance."
+                )
+            allowed_systems = (
+                ("instrumental",) if kind == "instrumental" else ("AB", "Vega")
+            )
+            if magnitudes.magnitude_system not in allowed_systems:
+                raise ValueError(
+                    f"Magnitude system {magnitudes.magnitude_system!r} "
+                    f"is incompatible with kind={kind!r}."
+                )
+        self._magnitudes[self._key(info)][kind] = magnitudes
 
-        standard_star_magnitudes = self.standard_stars[0].magnitudes
-        self._zpoints = standard_star_magnitudes.calculate_zero_points(
-            update=True, sigma=clip_sigma)
+    def show_magnitudes(self, *, kind: MagnitudeKind = "calibrated") -> None:
+        """Print one compact magnitude summary per source in collection order.
 
-        return self._zpoints  # This is a QTable
+        Parameters
+        ----------
+        kind : {"instrumental", "reference", "calibrated"}, optional
+            Result slot to display. Default is ``"calibrated"``.
 
-    def calibrate_targets(self, zpoints=None):
+        Notes
+        -----
+        Show the source name and field once, followed by the magnitude-system
+        label and FilterMagnitude.to_table's filter, magnitude, error and
+        significance columns. Missing values remain ``--`` and upper-limit
+        errors retain the existing ``UL (-99)`` display. An undefined result
+        is reported explicitly without creating a placeholder measurement.
 
-        targets = self.targets
+        This method only formats existing results. It does not calculate,
+        calibrate, modify or save measurements. Use selections such as
+        ``by_role("science")`` before calling to restrict the displayed sources.
+        """
+        self._check_kind(kind)
+        summaries: list[str] = []
 
-        for target in targets:
+        for info in self._source_infos:
+            magnitudes = self._magnitudes[self._key(info)][kind]
+            heading = (
+                f"{info.source_name}\n"
+                f"Field: {info.observation_field.field_name}"
+            )
+            table = (
+                magnitudes.to_table() if magnitudes is not None
+                else f"No {kind} magnitudes available."
+            )
+            summaries.append(f"{heading}\n{table}")
 
-            mag = target.magnitudes
-            mag.zero_points = self.zpoints
-            mag.calibrate_inst_mags()
+        print("\n\n".join(summaries) if summaries else "No sources to display.")
 
-        return
+    def calculate_zero_points(
+        self, sigma: float = 3.0, *, min_significance: float = 3.0
+    ) -> DataFrame:
+        """Calculate and store per-filter standard-star zero points.
 
-    def list_calibrated_targets(self):
+        Use standard-role sources with finite reference/instrumental magnitudes,
+        no instrumental upper-limit flag, and detection significance at least
+        ``min_significance``. Preserve the legacy method: reference minus
+        instrumental magnitude, one pass of scipy.stats.zscore filtering at
+        ``sigma``, then an unweighted arithmetic mean. A singleton or constant
+        sample is retained rather than rejected by undefined z-scores.
 
-        telescope = self.telescope
+        Return an independent pandas DataFrame with per-filter ``zero_point``
+        and population ``scatter`` (both numerical magnitudes), sample counts,
+        and magnitude-system labels. Scatter describes retained stars; it is
+        not propagated as a zero-point uncertainty. Neither catalog errors nor
+        instrumental errors weight the mean. No exposure-time correction,
+        color transformation, extinction or aperture correction is applied.
 
-        for target in self.targets:
-            print(target.source_name)
-            print(target.skycoord.to_string("hmsdms", sep=":", precision=2, )[0])
-            # print magnitudes
-            print(f"The magnitudes in {telescope.filters} are:")
-            for filter_names in telescope.filters:
-                for i in np.around(
-                        target.magnitudes.cab_mags[filter_names].value, 4):
-                    print(i)
+        All standards must share one Telescope instance and reference magnitude
+        system. Science-role sources in a mixed collection are ignored. A filter
+        without eligible standards has NaN results; no eligible filter raises
+        ValueError. Source magnitude slots are never changed by this method.
+        """
+        from ._zero_points import calculate_zero_points
 
-            # print magnitude errors
-            print(f"The magnitude errors in {telescope.filters} are:")
-            for filter_names in telescope.filters:
-                for i in np.around(
-                        target.magnitudes.cab_mag_errors[filter_names].value, 4):
-                    print(i)
+        result = calculate_zero_points(self, sigma, min_significance)
+        self._zero_point_statistics = result
+        return result.summary.copy(deep=True)
 
-            # print detection significance
-            print(f"The detection significance in {telescope.filters} are:")
-            for filter_names in telescope.filters:
-                for i in np.around(
-                        target.magnitudes.detection_significance[filter_names].value, 4):
-                    print(i)
+    def _get_zero_point_statistics(self) -> _ZeroPointStatistics:
+        """Require an existing result that still matches the standard inputs."""
+        from ._zero_points import standard_signature
 
-            print(
-                "======================================================================")
-            print(
-                "======================================================================")
+        result = self._zero_point_statistics
+        if result is None:
+            raise RuntimeError("Call calculate_zero_points() first.")
+        if result.signature != standard_signature(self):
+            raise RuntimeError(
+                "Standard-star measurements changed; call calculate_zero_points() again."
+            )
+        return result
 
-    def __getitem__(self, value):
+    @property
+    def zero_points(self) -> DataFrame:
+        """Return a copy of the current per-filter summary; values are in mag."""
+        return self._get_zero_point_statistics().summary.copy(deep=True)
 
-        if isinstance(value, str):
+    @property
+    def zero_point_details(self) -> DataFrame:
+        """Return per-star/filter magnitudes, zero points and selection reasons.
 
-            return self.filter_sources(source_name=value)
+        Numeric magnitude columns are in mag. The returned DataFrame is a
+        defensive copy and includes excluded measurements for inspection.
+        """
+        return self._get_zero_point_statistics().details.copy(deep=True)
 
-        elif isinstance(value, int):
-            return self._sources[value]
+    def plot_zero_point_statistics(
+        self,
+        *,
+        reference_offset: float = 0.1,
+        save_path: str | Path | None = None,
+    ) -> Figure:
+        """Show one panel per measured filter using the stored zero points.
 
-        elif isinstance(value, slice):
+        Plot all finite individual zero points, with retained points in blue,
+        rejected points as orange crosses, and the retained average in green.
+        Each panel reports retained/rejected counts and, when present, the
+        number of unavailable offsets that have no finite value to plot.
+        Red lines at average +/- ``reference_offset`` mag are visual guides,
+        not clipping thresholds or uncertainty bounds. Return the Figure for
+        further inspection. Save only when ``save_path`` is explicitly supplied.
+        Call calculate_zero_points first; modified standard inputs require a
+        fresh calculation. Plotting never recalculates or changes the result.
+        """
+        from ._zero_points import plot_zero_point_statistics
 
-            # set up the start of the slicing
-            if value.start is None:
-                start = 0
-            elif value.start < 0:
-                start = value.start + self.nsources
-            else:
-                start = value.start
+        return plot_zero_point_statistics(
+            self._get_zero_point_statistics(), reference_offset, save_path
+        )
 
-            # set up the stop of the slicin
-            if value.stop is None:
-                stop = -1 + self.nsources
-            elif value.stop < 0:
-                stop = value.stop + self.nsources
-            else:
-                stop = value.stop
+    def calibrate_targets(self, *, standard_sources: Sources) -> DataFrame:
+        """Apply standard-star zero points to all science sources in this view.
 
-            indices = np.arange(start, stop, value.step)
-            return [self._sources[idx] for idx in indices]
+        Reuse the supplied collection's inspected zero points. If none have
+        been calculated, calculate them with the default thresholds first.
+        Changed standard inputs require an explicit recalculation. Standards
+        may share the science observation field or occupy a separate field.
+
+        Add each filter's zero point to the original instrumental magnitude
+        and write a new FilterMagnitude to the calibrated slot. Preserve the
+        instrumental errors and significance exactly, including the -99 mag
+        upper-limit error flag. Catalog errors and zero-point uncertainty are
+        deliberately not propagated. The output system follows the reference
+        magnitudes; there is no AB/Vega conversion.
+
+        Return a pandas DataFrame of all science source/filter results, with
+        magnitude/error values in mag. Missing instrumental values remain NaN;
+        a source without instrumental results has no calibrated result. A
+        finite instrumental value without a usable zero point, or a Telescope
+        mismatch, raises before any calibrated slot is updated. Repeated calls
+        always use instrumental magnitudes, never already calibrated values.
+        """
+        from ._zero_points import calibrate_targets
+
+        if not isinstance(standard_sources, Sources):
+            raise TypeError("standard_sources must be a Sources object.")
+        if standard_sources._zero_point_statistics is None:
+            standard_sources.calculate_zero_points()
+        result = standard_sources._get_zero_point_statistics()
+        return calibrate_targets(self, result)

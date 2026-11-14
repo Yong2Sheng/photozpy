@@ -8,3 +8,7 @@ exclude = [
     ".mypy_cache",
     ".pytest_cache",
 ]
+
+
+[lint]
+select = ["E9", "F"]

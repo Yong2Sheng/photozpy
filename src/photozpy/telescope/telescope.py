@@ -1,269 +1,220 @@
-"""
-Written by Yong Sheng at Clemson University, 2023 for the photozpy project.
-Advisor: Dr. Marco Ajello
-Other contributor(s):
-"""
+from __future__ import annotations
 
-import pandas as pd
-from pathlib import Path
-from astropy import units as u
-from astropy.units.quantity import Quantity
-from astropy.table import QTable
-import os
+from collections.abc import Sequence
+from datetime import date
+from itertools import combinations
+from typing import Any
+
+from astropy.units import Quantity
+
+from .ccd import CCD
+from .filterset import FilterSet, UnknownFilterAliasError
 
 
-class Telescope():
-
+class Telescope:
     """
-    Manages the telecope, ccd and filter information.
+    Represent a telescope configuration composed of CCD definitions and filter sets.
+
+    A Telescope manages:
+        - one or more CCD definitions
+        - one or more filter sets
+        - optional telescope-level metadata
+
+    During initialization, the input CCDs and filter sets are normalized into
+    immutable tuples and validated for internal conflicts:
+
+        - CCD definitions must not have overlapping valid date ranges
+        - filter sets must not have overlapping resolvable filter names
+
+    This class provides convenience methods to:
+        - print CCD and filter-set summaries
+        - query CCD field values by observation date
+        - access common CCD parameters such as gain and read noise
+        - list all standard filter names available in the telescope
+        - resolve a filter alias across all stored filter sets
     """
 
-    def __init__(self, telescope, mode, ccd, ccd_gain=None,
-                 ccd_rdnoise=None, filters=None, lib_path=None):
-        """
-        Defines the telescope parameters. It reads the pre-defined telescope library and check if the telescope, ccd and mode combination is in the library.
-        It also support the pass the parameters by the keyword argument: ccd_gain, ccd_rdnoise, filters.
-        Note that the passed keyword will overwrite the values read from the library!
+    def __init__(
+        self,
+        ccds: CCD | Sequence[CCD],
+        filter_sets: FilterSet | Sequence[FilterSet],
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
 
-        Parameters
-        ----------
-        telescope: str; the name of the telescope.
-        ccd: str; the name of ccd in the pre-defined telescope library.
-        mode: str; mode determines the combination of the filters used.
-        ccd_gain: astropy.units.quantity.Quantity; the gain of the ccd. Unit: electron/ADU
-        ccd_rdnoise: astropy.units.quantity.Quantity; the read noise of the ccd. Unit: electron/pixel
-        lib_path: pathlib.Path or str; the path to the alternative telescope library file.
-        filters: list; list of filters.
-
-        Returns
-        -------
-
-        """
-
-        if lib_path is not None:
-            if isinstance(lib_path, (Path, str)):
-                lib_path = Path(lib_path)
-            else:
-                raise TypeError(
-                    "Only str or pathlib.Path is supported for lib_path!")
-            print("Reading telescope and ccd information from customed library.")
-            self.lib_df = pd.read_csv(lib_path, sep=",", header=0)
+        # check if input ccds is valid
+        if isinstance(ccds, CCD):
+            self._ccds = (ccds,)
+        elif isinstance(ccds, Sequence) and not isinstance(ccds, (str, bytes)):
+            self._ccds = tuple(ccds)
+            if not all(isinstance(ccd, CCD) for ccd in self._ccds):
+                raise TypeError("All elements in ccds must be CCD objects.")
         else:
-            directory = os.path.dirname(__file__)
-            self.lib_df = pd.read_csv(
-                directory + "/telescope_library.csv", sep=",", header=0)
+            raise TypeError("ccds must be a CCD or a sequence of CCD objects.")
 
-        self._telescope = telescope
-        self._mode = mode
-        self._ccd = ccd
-        self._ccd_gain = ccd_gain
-        self._ccd_rdnoise = ccd_rdnoise
-        self._filters = filters
-
-        return
-
-    def get_telescope_parameters(self, para_name):
-        """
-        Read and return the telescope parameters you want.
-
-        Parameters
-        ----------
-        para_name: str; the parameter name.
-
-        Returns
-        -------
-        para_value: list or float; the value of the parameter
-
-        """
-
-        if para_name == "ccd_gain":
-            para = self._ccd_gain
-
-        elif para_name == "ccd_rdnoise":
-            para = self._ccd_rdnoise
-
-        elif para_name == "filters":
-            para = self._filters
-
-        else:
-            raise ValueError(
-                "The parameter name you input doesn't exist! Try ccd_gain, ccd_rdnoise or filters!")
-
-        if para is None:
-            # if the parameter is None, it will read from the library.
-            filtered = self.lib_df[(self.lib_df["telescope"] == self._telescope) & (
-                self.lib_df["ccd"] == self._ccd) & (self.lib_df["mode"] == self._mode)]
-
-            if filtered.shape[0] == 0:
+        # check if ccds have conflicts
+        for left, right in combinations(self._ccds, 2):
+            if left.conflicts_with(right):
                 raise ValueError(
-                    "The telescope, ccd and mode combination doesn't exist in the library!")
-            elif filtered.shape[0] >= 2:
-                raise ValueError(
-                    "More than one set of telescope, ccd and mode combinations in the library!")
-            elif filtered.shape[0] == 1:
-                if para_name == "ccd_gain" or para_name == "ccd_rdnoise":
-                    para_value = float(
-                        filtered.loc[:, para_name].to_numpy()[0])
-                elif para_name == "filters":
-                    para_value = filtered.loc[:, para_name].to_string(
-                        header=False, index=False).split("/")
+                    f"CCD {left.name!r} and {right.name!r} "
+                    f"have an overlap on valid date range."
+                )
 
+        # check if input filter_sets is valid
+        if isinstance(filter_sets, FilterSet):
+            self._filter_sets = (filter_sets,)
+        elif isinstance(filter_sets, Sequence) and not isinstance(filter_sets, (str, bytes)):
+            self._filter_sets = tuple(filter_sets)
+            if not all(isinstance(fs, FilterSet) for fs in self._filter_sets):
+                raise TypeError("All elements in filter_sets must be FilterSet objects.")
         else:
-            para_value = para
+            raise TypeError(
+                "filter_sets must be a FilterSet or a sequence of FilterSet objects."
+            )
 
-        return para_value
+        # check if filtersets have conflicts
+        for left, right in combinations(self._filter_sets, 2):
+            conflicts = left.find_conflicts(right)
+            if conflicts:
+                raise ValueError(
+                    f"Filter sets {left.filterset_name!r} and {right.filterset_name!r} "
+                    f"conflict on resolvable names: {conflicts!r}"
+                )
 
-    @property
-    def telescope(self):
+        self._metadata = {} if metadata is None else dict(metadata)
 
-        return self._telescope
-
-    @property
-    def ccd(self):
-
-        return self._ccd
-
-    @property
-    def mode(self):
-
-        return self._mode
-
-    @property
-    def ccd_gain(self):
-
-        self._ccd_gain = self.get_telescope_parameters("ccd_gain")
-
-        if not isinstance(self._ccd_gain, Quantity):
-            self._ccd_gain = self._ccd_gain * u.electron / u.adu
-
-        return self._ccd_gain
-
-    @property
-    def ccd_rdnoise(self):
-
-        self._ccd_rdnoise = self.get_telescope_parameters("ccd_rdnoise")
-
-        if not isinstance(self._ccd_rdnoise, Quantity):
-            self._ccd_rdnoise = self._ccd_rdnoise * u.electron / u.pix
-
-        return self._ccd_rdnoise
-
-    @property
-    def filters(self):
-
-        return self.get_telescope_parameters("filters")
-
-    @property
-    def telescope_summary(self, save=False, save_path=None):
+    def print_ccd_summary(self) -> None:
         """
-        Produce a summary of the telescope by dictionary.
+        Print summary tables for all CCD definitions in the telescope.
+        This is a convenience method for interactive use. It calls
+        ``print_summary()`` on each CCD stored in the telescope.
         """
 
-        self.summary = {"telescope": self._telescope,
-                        "mode": self._mode,
-                        "ccd": self._ccd,
-                        "ccd_gain": self.ccd_gain,
-                        "ccd_rdnoise": self.ccd_rdnoise,
-                        "filters": self.filters}
+        for ccd in self._ccds:
+            ccd.print_summary()
 
-        return self.summary
-
-    def save_telescope_summary(self, save_path=None):
+    def print_filterset_summary(self) -> None:
         """
-        Save the telescope_summary as a ecsv file.
+        Print summary tables for all filter sets in the telescope.
+        This is a convenience method for interactive use. It calls
+        ``print_summary()`` on each filter set stored in the telescope.
+        """
+
+        for fs in self._filter_sets:
+            fs.print_summary()
+
+    def ccd_value(
+        self,
+        field_name: str,
+        obs_date: date | None = None,
+    ) -> object | tuple[object, ...]:
+        """
+        Return CCD field value(s) from the telescope.
+
+        If ``obs_date`` is not provided, return the requested field from all CCD
+        definitions as a tuple. If ``obs_date`` is provided, return the field from
+        the unique CCD definition valid on that date.
 
         Parameters
         ----------
-        save_path: str or pathlib.Path; the path to save the ecsv file, including the file name.
+        field_name : str
+            Name of the CCD attribute to retrieve, such as ``"gain"`` or
+            ``"rdnoise"``.
+        obs_date : date | None, optional
+            Observation date used to select the valid CCD definition. If ``None``,
+            values from all CCD definitions are returned.
 
         Returns
         -------
-        None
-        """
+        object | tuple[object, ...]
+            A single field value if ``obs_date`` is provided, otherwise a tuple of
+            values from all CCD definitions.
 
-        a = [self.telescope]
-        b = [self.mode]
-        c = [self.ccd]
-        d = [self.ccd_gain]
-        e = [self.ccd_rdnoise]
-        f = [self.filters]
-
-        qtable = QTable([a, b, c, d, e, f],
-                        names=(
-            'telescope',
-            'mode',
-            'ccd',
-            'ccd_gain',
-            'ccd_rdnoise',
-            'filters'),
-            meta={'name': 'Telescope information'},
-            dtype=[str, str, str, float, float, list])
-
-        qtable.write(save_path, format="ascii.ecsv")
-
-        return
-
-    def map_filters(self, name, **filter_dict):
-        """
-        Map filter names to standard filter names.
-
-        Parameters
-        ----------
-        name: the input filter name to be matched to a standard one.
-        filter_dict: customized filter mapping dictionary.
-
-        Return
+        Raises
         ------
-        mapped_filter: str; the name of the mapped standard filter.
+        AttributeError
+            If ``field_name`` is not a valid CCD attribute.
+        ValueError
+            If no CCD definition is valid for ``obs_date``, or if more than one CCD
+            definition is valid for that date.
         """
 
-        if filter_dict == {}:
-            # use the default mappers
-            mappers = {"Sloan g'2": "SDSS_g'",
-                       "Sloan r'2": "SDSS_r'",
-                       "Sloan i'2": "SDSS_i'",
-                       "Sloan z'2": "SDSS_z'",
-                       "Sloan_g'2": "SDSS_g'",
-                       "Sloan_r'2": "SDSS_r'",
-                       "Sloan_i'2": "SDSS_i'",
-                       "Sloan_z'2": "SDSS_z'",
-                       "SDSS g": "SDSS_g'",
-                       "SDSS r": "SDSS_r'",
-                       "SDSS i": "SDSS_i'",
-                       "SDSS z": "SDSS_z'",
-                       "SDSS_g": "SDSS_g'",
-                       "SDSS_r": "SDSS_r'",
-                       "SDSS_i": "SDSS_i'",
-                       "SDSS_z": "SDSS_z'",
-                       "Bessell I": "Bessell_I"}  # ,
-            # "B": "ubb",
-            # "UVM2": "um2",
-            # "U": "uuu",
-            # "V": "uvv",
-            # "UVW1": "uw1",
-            # "UVW2": "uw2"}
-        else:
-            mappers = filter_dict
+        if not hasattr(self._ccds[0], field_name):
+            raise AttributeError(f"CCD has no attribute {field_name!r}.")
 
-        mapped_filters = [
-            value for key,
-            value in mappers.items() if key == name]
-        # remove the duplicated filter names
-        mapped_filters = [*set(mapped_filters)]
+        if obs_date is None:
+            return tuple(getattr(ccd, field_name) for ccd in self._ccds)
 
-        if len(mapped_filters) == 0:
-            raise ValueError(
-                "Mapping the input filter failed! No mapped filter {name} was found!")
-        elif len(mapped_filters) > 1:
-            print(mapped_filters)
-            raise ValueError(
-                "Mapping the input filter failed! More than two mapped filters are found!")
-        else:
-            return mapped_filters[0]
+        matched = tuple(
+            ccd for ccd in self._ccds
+            if ccd.valid_from <= obs_date <= ccd.valid_to
+        )
 
-    def __eq__(self, other):
+        if not matched:
+            raise ValueError(f"No CCD is valid for obs_date={obs_date!r}.")
 
-        if self.telescope_summary == other.telescope_summary:
-            return True
-        else:
-            return False
+        return getattr(matched[0], field_name)
+
+    def gain(
+        self,
+        obs_date: date | None = None
+    ) -> Quantity | tuple[Quantity, ...]:
+        """
+        Return CCD gain value(s) from the telescope.
+        If ``obs_date`` is not provided, return the gain from all CCD definitions
+        as a tuple. If ``obs_date`` is provided, return the gain from the CCD
+        definition valid on that date.
+        """
+        return self.ccd_value("gain", obs_date)
+
+    def rdnoise(
+        self,
+        obs_date: date | None = None
+    ) -> Quantity | tuple[Quantity, ...]:
+        """
+        Return CCD read-noise value(s) from the telescope.
+
+        If ``obs_date`` is not provided, return the read noise from all CCD
+        definitions as a tuple. If ``obs_date`` is provided, return the read noise
+        from the CCD definition valid on that date.
+        """
+        return self.ccd_value("rdnoise", obs_date)
+
+    def filters(self) -> tuple[str, ...]:
+        """
+        Return all standard filter names available in the telescope.
+
+        The returned tuple is flattened across all filter sets stored in the
+        telescope.
+        """
+
+        return tuple(
+            standard_name
+            for fs in self._filter_sets
+            for standard_name in fs.standard_names
+        )
+
+    def resolve_filter_alias(
+        self,
+        alias: str,
+    ) -> str:
+        """
+        Resolve a filter alias to the telescope-standard filter name.
+
+        The alias is searched across all filter sets stored in the telescope.
+        The first matching standard name is returned.
+
+        Raises
+        ------
+        UnknownFilterAliasError
+            If the alias cannot be resolved in any filter set.
+        """
+
+        for fs in self._filter_sets:
+            try:
+                return fs.resolve(alias)
+            except UnknownFilterAliasError:
+                continue
+
+        raise UnknownFilterAliasError(
+            f"Unknown filter alias {alias!r} in telescope."
+        )
