@@ -29,6 +29,13 @@ Master Light 应具有 WCS、`FIELD`、`FILTER` 和以像素为单位的 `FWHM`�
 测光还读取 `BUNIT`（ADU）、`GAIN`、`RDNOISE`、`NCOMBINE`。
 这些 metadata 来自之前的处理步骤，不在这里重复手工填写。
 
+Science Light 如需关闭像素 sigma clipping，可在前面的叠加 cell 显式使用
+`combiner.combine_light_or_flat(image_type="Light", method="average", overwrite=True)`。
+这只改变 Light 的叠加方式；Bias、Dark、Flat 保持原来的 sigma clip。
+直接平均仍保留无效像素 MASK，不做背景匹配或通量缩放，也不会额外剔除
+漏检的异常像素。重新生成 master 后，应重跑后续 WCS、FWHM 和测光，并
+在新 master 上检查已有 regions。
+
 ```python
 from pathlib import Path
 

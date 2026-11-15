@@ -8,6 +8,39 @@ and calibrates the targets. The catalog query alone does not measure flux.
 For a Chinese notebook-authoring checklist and the validated SARA cell sequence,
 see [Photometry_Notebook_Memo.md](Photometry_Notebook_Memo.md).
 
+## Choose the science-image combination method
+
+The default `Combine` recipe remains sigma-clipped average. Registered science
+Light frames can explicitly use a plain arithmetic mean after reviewing and
+cleaning the individual exposures:
+
+```python
+from photozpy import Combine
+
+combiner = Combine(image_collection=analysis_images, telescope=telescope)
+analysis_images = combiner.combine_light_or_flat(
+    image_type="Light",
+    method="average",
+    overwrite=True,  # Explicitly replace existing Master Lights if present.
+)
+```
+
+This disables pixel-value clipping, without sky matching, image normalization,
+or weighting. Input validity masks still exclude registration footprints and
+bad pixels; a pixel flagged only in `CMASK` remains usable after cosmic-ray
+cleaning. Fully uncovered output pixels remain masked. Residual unmasked defects
+can enter the mean, so inspect the cleaned inputs and resulting masters.
+
+`method="average"` is supported for Light only. Bias, Dark, and Flat retain the
+existing sigma-clipping recipe, including per-input Flat normalization. The
+output `COMBMETH` header records `average`, `sigma clip`, or `copy` for one input.
+`NCOMBINE` is the number of input exposures, not a per-pixel coverage map. The
+existing output uncertainty policy and downstream photometry error model are
+unchanged.
+
+After replacing a Master Light, repeat its downstream WCS/FWHM measurements and
+photometry, and review the saved regions on the new image before reuse.
+
 ## Select the catalog query image
 
 The analysis notebook already defines `analysis_dir`, `analysis_images`, and
