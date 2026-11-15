@@ -1,6 +1,8 @@
 """Check source/result association without running image processing."""
 
 from dataclasses import replace
+import csv
+from io import StringIO
 
 from astropy.coordinates import SkyCoord
 import astropy.units as u
@@ -220,6 +222,7 @@ def test_show_magnitudes_groups_sources_without_changing_results(infos, capsys, 
     assert output.index(infos[0].source_name) < output.index(infos[1].source_name)
     assert "Field: science_field" in output
     assert "Field: standard_field" in output
+    assert "target\nRA / Dec (ICRS): 10:00:00.000 +02:00:00.000" in output
     assert f"Magnitude system: {result.magnitude_system}" in output
     assert "Magnitude (mag)" in output and "Significance" in output
     assert "18.2000" in output and "UL (-99)" in output and "--" in output
@@ -236,3 +239,85 @@ def test_show_magnitudes_handles_empty_and_validates_kind_before_display(infos, 
     with pytest.raises(ValueError, match="kind"):
         Sources(*infos).show_magnitudes(kind="invalid")
     assert capsys.readouterr().out == ""
+
+
+def test_tsv_copies_four_sources_in_griz_order(infos, capsys):
+    sources = Sources(*(replace(infos[0], source_name=f"target_{i}") for i in range(4)))
+    result = FilterMagnitude(
+        telescope=SARA_CT,
+        filter_names=("SDSS g", "SDSS r", "SDSS i", "SDSS z"),
+        magnitudes=(19.7076, 19.2180, 18.5314, 18.8222),
+        errors=(0.0844, 0.0865, 0.0770, -99),
+        significance=(12.86, 12.55, 14.10, 2.63),
+    )
+    before = result.qtable.copy(copy_data=True)
+    for source in sources:
+        source.set_magnitudes(kind="calibrated", magnitudes=result)
+    sources.show_magnitudes(
+        format="tsv",
+        filters=("SDSS_g", "SDSS_r", "SDSS_i", "SDSS_z"),
+    )
+    output = capsys.readouterr().out
+    rows = list(csv.DictReader(StringIO(output), delimiter="\t"))
+    assert len(rows) == 16
+    for i in range(4):
+        block = rows[4 * i:4 * i + 4]
+        assert [r["filter"] for r in block] == [f"SDSS_{b}'" for b in "griz"]
+        assert all(r["source_name"] == f"target_{i}" for r in block)
+        assert all(r["ra"] == "10:00:00.000" for r in block)
+        assert all(r["dec"] == "+02:00:00.000" for r in block)
+        assert all(r["magnitude_system"] == "AB" for r in block)
+        assert block[0]["magnitude"] == "19.7076"
+        assert float(block[3]["error"]) == -99
+    assert "UL" not in output and "--" not in output
+    for column in ("magnitude", "error", "significance"):
+        np.testing.assert_array_equal(result.qtable[column], before[column])
+
+    sources.show_magnitudes(
+        format="tsv",
+        filters=("SDSS_g", "SDSS_r", "SDSS_i", "SDSS_z"),
+        columns=("magnitude", "error"), include_header=False,
+    )
+    paste_rows = capsys.readouterr().out.splitlines()
+    assert len(paste_rows) == 16
+    assert paste_rows[0] == "19.7076\t0.0844"
+    assert paste_rows[3] == "18.8222\t-99.0000"
+
+
+def test_tsv_keeps_missing_rows_and_quotes_metadata(infos, capsys):
+    sources = Sources(replace(infos[0], source_name='target\t"quoted"\nline'), infos[1])
+    sources[0].set_magnitudes(kind="calibrated", magnitudes=measurement("AB"))
+    sources.show_magnitudes(format="tsv", filters=("SDSS_r", "SDSS_g"))
+    rows = list(csv.DictReader(StringIO(capsys.readouterr().out), delimiter="\t"))
+    assert len(rows) == 4
+    assert rows[0]["source_name"] == 'target\t"quoted"\nline'
+    assert rows[0]["magnitude"] == ""
+    assert rows[1]["magnitude"] == "18.2000"
+    assert rows[2]["magnitude"] == rows[3]["magnitude"] == ""
+    assert rows[2]["magnitude_system"] == ""
+    assert rows[2]["ra"] == "10:00:00.000"
+
+
+@pytest.mark.parametrize("options", [
+    {"format": "unknown"},
+    {"format": "tsv", "columns": ("unknown",)},
+    {"format": "tsv", "columns": ()},
+    {"format": "tsv", "filters": ()},
+    {"format": "tsv", "filters": ("SDSS_g", "SDSS g")},
+    {"format": "tsv", "filters": ("unknown",)},
+    {"columns": ("magnitude",)},
+    {"include_header": False},
+])
+def test_show_magnitudes_validates_before_printing(infos, capsys, options):
+    with pytest.raises(ValueError):
+        Sources(*infos).show_magnitudes(**options)
+    assert capsys.readouterr().out == ""
+
+
+def test_show_magnitudes_table_filter_selection(infos, capsys):
+    sources = Sources(infos[0])
+    sources.set_magnitudes(kind="calibrated", magnitudes=measurement("AB"))
+    sources.show_magnitudes(filters=("SDSS_r", "SDSS_g"))
+    output = capsys.readouterr().out
+    assert output.index("SDSS_r'") < output.index("SDSS_g'")
+    assert "SDSS_u'" not in output

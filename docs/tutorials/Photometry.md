@@ -517,7 +517,7 @@ calibrated_table = sources.calibrate_targets(standard_sources=standard_sources)
 sources.show_magnitudes(kind="calibrated")
 ```
 
-show_magnitudes prints each source name and field once, followed by its magnitude
+show_magnitudes prints each source name, ICRS RA/Dec, and field once, followed by its magnitude
 system and a compact filter/magnitude/error/significance table. It reuses the
 existing FilterMagnitude.to_table formatting: missing values are `--` and
 upper-limit errors are `UL (-99)`. Undefined results are reported explicitly.
@@ -525,6 +525,14 @@ The method only displays existing results; it does not calculate or save them.
 Use the same entry point with `kind="instrumental"` or `kind="reference"` to
 inspect those slots. If the collection contains both roles, select
 `sources.by_role("science")` first to display only science targets.
+
+For per-source copy boxes matching a griz spreadsheet, use
+`sources.show_magnitudes(format="google_sheets", filters=("SDSS_g", "SDSS_r", "SDSS_i", "SDSS_z"))`.
+The default block contains obs mag, STD correction (calibrated minus instrumental),
+corrected mag, error and detection significance. Use
+`columns=("magnitude", "error")` to paste directly
+into existing magnitude/error columns. See [Sources](Sources.md) for all output
+options and missing-value conventions.
 
 calibrated_table remains available as the complete pandas DataFrame for export
 or detailed inspection; it does not need to be the notebook's normal display.
