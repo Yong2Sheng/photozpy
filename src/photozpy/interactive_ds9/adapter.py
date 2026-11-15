@@ -245,6 +245,17 @@ class DS9Adapter:
             self.set("pan", "to", *pan, "image")
         self._has_loaded_image = True
 
+    def reset_display(self) -> None:
+        """Restore neutral contrast and automatic limits without reloading FITS.
+
+        Only display settings change. Keep regions (including unsaved edits),
+        image-coordinate pan, zoom, and the current colormap/inversion intact.
+        """
+        self.set_cmap_parameters(contrast=1.0, bias=0.5)
+        self.set("scale", "scope", "global")
+        self.set_scale_function("asinh")
+        self.set_scale_mode("zscale")
+
     def set_zscale(self) -> None:
         """Set DS9's scale mode to ``zscale``."""
 

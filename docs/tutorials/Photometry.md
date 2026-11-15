@@ -317,6 +317,16 @@ Editing a radius is allowed if the radius ordering remains
 valid. Preserve the source ID and role tags when editing. Unsupported shapes or
 unrecognized IDs block saving, rather than silently corrupting associations.
 
+The review controls include **Reset display**. It restores contrast=1,
+bias=0.5, global zscale limits and an asinh stretch. The first displayed image
+also initializes these settings so an existing DS9 window cannot carry extreme
+contrast/bias into a new review. Later manual display choices are preserved
+until explicitly reset. Reset does not reload FITS, change zoom/pan, remove
+regions, save/discard edits, or modify science pixels. Use it if the view turns
+mostly white/black or strongly emphasizes background noise after colorbar
+adjustments. Right-drag controls colorbar contrast/bias, separately from numeric
+ADU scale limits.
+
 Save & Next reads DS9 image-coordinate regions, separates circles/annuli,
 validates every pair, and publishes both files and the JSON record. It advances
 only on success. On the last image, this same button saves before completing.
@@ -553,8 +563,12 @@ tables are independent copies. `standard_sources.zero_points` retrieves another
 copy of the current summary without recomputation.
 
 Plotting preserves the old per-filter scatter/mean layout. Retained offsets are
-blue circles, rejected finite offsets are orange crosses, and the retained mean
-is green. Titles explicitly count retained and rejected offsets, including zero
+blue circles, sigma-clipped offsets are gray crosses, other excluded finite
+offsets are orange crosses, and the retained mean is green. Purple dashed lines
+show the actual initial eligible mean ± sigma × population standard deviation
+used by the single-pass z-score rejection. They are stored with the calculation,
+not inferred from the retained mean/scatter. Notes show sigma-clipped counts and
+unavailable-value reasons. Titles explicitly count retained and rejected offsets, including zero
 rejections. Rejected counts include finite offsets excluded by the significance
 cut as well as sigma clipping; `n_clipped` in the summary counts only clipping.
 Axes include all displayed offsets, even outliers beyond the red guide lines.
@@ -562,7 +576,7 @@ Unavailable offsets (for example, a missing reference magnitude or an upper
 limit) have no valid zero point to plot and are counted separately when present.
 The function returns a Matplotlib Figure and writes no file unless `save_path`
 is supplied. It handles one filter or any panel count; filters without finite
-offsets are omitted. The +/- 0.1 mag red guides are unrelated to the clipping
+offsets are omitted. The +/- 0.1 mag red dotted guides are unrelated to the clipping
 threshold, retained scatter or calibration uncertainty.
 
 calibrate_targets reuses the calculated zero points, including custom clipping
@@ -587,3 +601,139 @@ upper-limit flag. A limiting magnitude receives the same additive zero point.
 Catalog errors and zero-point uncertainty are intentionally not propagated;
 adding them is a separate future feature. No exposure-time normalization,
 extinction correction, color term or aperture correction is introduced here.
+
+
+## Optional local-background source masking and checks
+
+Each image keeps its own header FWHM and reviewed source/background geometry.
+Enable the following only for the reviewed-region photometry interface:
+
+```python
+from photozpy.photometry import LocalBackgroundOptions
+
+photometry_table = photometry.run_photometry(
+    sources=(standard_sources, sources),
+    regions=(standard_regions, science_regions),
+    background_options=LocalBackgroundOptions(
+        mask_growth_fwhm=1.5,
+        min_area_fraction=0.5,
+        min_pixels=50,
+        stability_growth_fwhms=(1.0, 1.5, 2.0),
+        stability_tolerance=1.0,
+    ),
+    verbose=False,
+)
+```
+
+SEP detects source footprints once per image at `detection_sigma=3`, `min_area=5`.
+An image-wide background map is used only for this detection. The photometric
+sky estimate remains the sigma-clipped **mean inside each local annulus**.
+Detected footprints are expanded by the requested multiple of that image's
+FWHM and excluded only from annulus statistics. Source aperture sums, saved
+regions, image data and calibration are not modified. CMASK is not used as a
+validity or neighbor mask. If no sources are detected, only validity masks apply.
+
+Effective annulus area is measured after validity masking, source masking and
+sigma clipping. An estimate below either minimum is `invalid_background`, with
+no magnitude assigned; `n_ann`, `mean_bkg` and `background_area_fraction` expose
+available diagnostics. Growth choices are not used to maximize S/N. The primary
+measurement always uses `mask_growth_fwhm`. For each candidate in
+`stability_growth_fwhms`, the background is estimated again. The largest absolute
+change from the primary mean, multiplied by source aperture area and divided by
+the primary **existing model count error**, is `background_stability_sigma`.
+
+`background_stability` is `stable`, `unstable`, `insufficient_area` (a trial has
+inadequate sky area), or `not_checked`. `background_trials` contains the candidate
+means, areas and validity as JSON; `background_warning` explains flagged results.
+Unstable trials do not change primary counts, choose a different mask, or replace
+the detection/UL status. Inspect these columns before using a result. The table
+metadata stores all options. An empty trial tuple explicitly disables stability
+checks; `mask_neighbors=False` enables area checks alone, without requiring FWHM.
+Omitting `background_options` preserves the old computation.
+
+These checks do **not** calibrate count errors for interpolation correlations,
+residual background structure or unresolved sources. Stable mask growth does not
+establish a reliable Gaussian detection significance. Use independent empirical
+noise validation before treating model S/N as a calibrated detection confidence.
+
+
+## Inspect the actual background masks
+
+After a successful `run_photometry(..., background_options=...)`, pass one source
+object to inspect **all available filters in one figure**, one filter per row:
+
+```python
+source = sources["PMN J0807-7629"]
+fig = photometry.plot_background_diagnostics(source)
+```
+
+The object supplies source identity, field and telescope filter order. A
+single-source `Sources` selection or `SourceInfo` is accepted. You can also pass
+an entire `Sources` collection to draw one all-filter figure for each source:
+
+```python
+figures = photometry.plot_background_diagnostics(sources)
+# For standards: photometry.plot_background_diagnostics(standard_sources)
+plt.show()
+
+# A multi-source call returns {(field_name, source_name): Figure}.
+fig = figures[("PMN", "PMN J0807-7629")]
+```
+
+Source order follows the input collection. Same-name sources in different fields
+remain separate. Sources with no snapshots are explicitly reported and skipped;
+no snapshots for the whole collection is an error. A single-source call continues
+to return one Figure. No source-name, field-name or filter-name
+arguments are needed. Only actual diagnostic snapshots from the latest run are
+shown: filters without images, rejected sources or invalid source apertures do
+not get fabricated masks. A source with no snapshots raises an explicit error.
+`photometry.get_background_diagnostics(source)` returns copied snapshots as an
+ordered filter-to-diagnostic dictionary for per-filter export. The existing
+`plot_background_diagnostic(source_name, filter_name, field_name=...)` remains
+available for inspecting a single filter.
+
+The figure contains the original local pixels with reviewed aperture/annulus
+outlines, the pixel-center mask used for the sky **mean**, and the mask used for
+**exact effective area**. Colors identify retained pixels, invalid pixels,
+detected-source exclusions, and sigma-clipped pixels. The exact-area view may
+include fractional boundary pixels. Photutils independently clips these two
+footprints; do not interpret their pixel counts as the same quantity. The area
+sequence shows geometric, on-image, validity-filtered, source-masked, and final
+clipped area. Stage differences are disjoint contributions in that order.
+`background_geometric_area`, `background_on_image_area`, `background_valid_area`
+and `background_source_masked_area` are also recorded in the table; `n_ann`
+remains the final exact effective area used by the existing error calculation.
+
+These are snapshots captured from the **same ApertureStats instance** used for
+the primary measurement. Plotting does not reread images or rerun detection or
+clipping. Snapshot data are cutouts, not full-image copies; source/field/filter
+and original zero-based pixel offsets are retained. Callers receive independent
+copies. Failed/insufficient primary backgrounds remain inspectable when an
+annulus overlaps the image; rejected or invalid source apertures have no snapshot.
+A new successful run replaces the snapshots, including clearing them if the run
+omits `background_options`. A failed run preserves the previous successful set.
+
+Export a mask snapshot to inspect it after restarting the kernel:
+
+```python
+from photozpy.photometry import BackgroundDiagnostic
+
+diagnostic = photometry.get_background_diagnostic(
+    "PMN J0807-7629", "SDSS_r'", field_name="PMN",
+)
+fig = diagnostic.plot()
+fig.savefig(analysis_dir / "PMN_r_background_mask.png", dpi=180)
+diagnostic.save(analysis_dir / "PMN_r_background_mask.fits")
+
+# No input image, Sources object or region session is required to reload it.
+restored = BackgroundDiagnostic.load(analysis_dir / "PMN_r_background_mask.fits")
+fig = restored.plot()
+```
+
+FITS extensions are `MEANLABEL`, `AREALABEL`, `AREAWEIGHT`, `DETECTED`,
+`SOURCEMASK`, and `METADATA`, plus the original local image in PRIMARY. Pixel
+labels are 0=outside annulus, 1=used, 2=invalid, 3=source mask, 4=sigma clipped.
+Exact area is the sum of `AREAWEIGHT` where `AREALABEL == 1`. Metadata contains
+geometry, options, clipping threshold, image association and area stages. Export
+refuses to replace an existing file unless `overwrite=True` is explicit. Export
+and plotting do not modify scientific image/region files or acceptance decisions.

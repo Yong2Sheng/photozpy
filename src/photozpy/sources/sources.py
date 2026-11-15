@@ -391,7 +391,9 @@ class Sources:
         """Show one panel per measured filter using the stored zero points.
 
         Plot all finite individual zero points, with retained points in blue,
-        rejected points as orange crosses, and the retained average in green.
+        sigma-clipped points as gray crosses, other excluded finite points as
+        orange crosses, and the retained average in green. Purple dashed lines
+        show actual single-pass limits from the initial eligible mean/std.
         Each panel reports retained/rejected counts and, when present, the
         number of unavailable offsets that have no finite value to plot.
         Red lines at average +/- ``reference_offset`` mag are visual guides,

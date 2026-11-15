@@ -7,6 +7,7 @@ Main function:
 - Perform aperture photometry
 """
 from pathlib import Path
+from copy import deepcopy
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 from ..collection_manager import CollectionManager
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
     from ..calibration._calibration_io import ImageInput
     from ..sources import Sources
     from .regions import PhotometryRegions, PhotometryRegionCollection
+    from .local_background import LocalBackgroundOptions
 
 
 class Photometry():
@@ -47,11 +49,92 @@ class Photometry():
         """Keep the explicit input image selection without directory rescanning."""
         self._image_collection = image_collection
         self.phot_table = QTable()
+        self._background_diagnostics = {}
 
     @property
     def results(self) -> QTable:
         """Return a copy of the last completed batch's measurement table."""
         return self.phot_table.copy(copy_data=True)
+
+    def get_background_diagnostic(self, source_name, filter_name, *, field_name=None):
+        """Return a copy of a primary-mask snapshot from the latest successful run.
+
+        Use the canonical filter string shown in results. Matching multiple
+        fields requires an explicit field_name. No image is reopened and no
+        detection or clipping is rerun. Requires background_options at measurement.
+        """
+        matches = [value for (field, source, band), value in self._background_diagnostics.items()
+                   if source == source_name and band == filter_name
+                   and (field_name is None or field == field_name)]
+        if not matches:
+            raise ValueError('No background diagnostic for this selection. Run photometry with background_options and an accepted, valid source aperture.')
+        if len(matches) != 1:
+            raise ValueError('Multiple fields match; supply field_name explicitly.')
+        return deepcopy(matches[0])
+
+    def get_background_diagnostics(self, source):
+        """Return all available filter snapshots for a single Sources/SourceInfo.
+
+        Identity and field come from the object. Order follows its Telescope.
+        Only actual snapshots from the latest run are returned: filters without
+        an image or usable source aperture do not acquire fabricated masks.
+        """
+        from ..sources import Sources, SourceInfo
+
+        if isinstance(source, Sources):
+            if len(source) != 1:
+                raise ValueError('Select exactly one source, for example sources["name"].')
+            info = source.source_info
+        elif isinstance(source, SourceInfo):
+            info = source
+        else:
+            raise TypeError('source must be a single-source Sources or SourceInfo object.')
+        matches = {
+            band: deepcopy(value)
+            for (field, name, band), value in self._background_diagnostics.items()
+            if field == info.observation_field.field_name and name == info.source_name
+        }
+        if not matches:
+            raise ValueError('No background diagnostics for this source in the latest run. Run photometry with background_options first.')
+        order = {band: index for index, band in enumerate(info.observation_field.telescope.filters())}
+        return dict(sorted(matches.items(), key=lambda item: (order.get(item[0], len(order)), item[0])))
+
+    def plot_background_diagnostics(self, source):
+        """Plot all available filters, accepting one source or a Sources collection.
+
+        One source returns a Figure. Multiple sources return an ordered dictionary
+        keyed by (field_name, source_name), with one Figure per source. Missing
+        snapshots in a collection are reported and skipped; no matches is an
+        error. No measurement, image read or clipping is repeated.
+        """
+        from ..sources import Sources
+        from .background_diagnostics import plot_background_collection
+        import warnings
+
+        if not isinstance(source, Sources) or len(source) == 1:
+            return plot_background_collection(list(self.get_background_diagnostics(source).values()))
+        prepared = {}
+        skipped = []
+        for single in source:
+            info = single.source_info
+            identity = (info.observation_field.field_name, info.source_name)
+            if not any(key[:2] == identity for key in self._background_diagnostics):
+                skipped.append(identity)
+                continue
+            prepared[identity] = list(self.get_background_diagnostics(single).values())
+        if not prepared:
+            raise ValueError('No background diagnostics for any source in this collection. Run photometry with background_options first.')
+        if skipped:
+            names = ', '.join(f'{field}/{name}' for field, name in skipped)
+            warnings.warn(f'Skipped sources without background diagnostic snapshots: {names}',
+                          UserWarning, stacklevel=2)
+        return {identity: plot_background_collection(items) for identity, items in prepared.items()}
+
+    def plot_background_diagnostic(self, source_name, filter_name, *, field_name=None):
+        """Plot the actual primary mean/area masks and area stages, without recomputing."""
+        return self.get_background_diagnostic(
+            source_name, filter_name, field_name=field_name,
+        ).plot()
 
     @staticmethod
     def read_fwhm(image_path, keyword="FWHM"):
@@ -456,6 +539,7 @@ class Photometry():
         *,
         regions: "PhotometryRegions | PhotometryRegionCollection | Sequence[PhotometryRegions | PhotometryRegionCollection] | None" = None,
         require_review: bool = True,
+        background_options: "LocalBackgroundOptions | None" = None,
     ) -> QTable | None:
         """Measure saved aperture/annulus pairs and attach instrumental results.
 
@@ -483,6 +567,14 @@ class Photometry():
             Require completed review records, default True. Explicitly disable
             only for unattended measurements of generated regions.
 
+        background_options : LocalBackgroundOptions or None, optional
+            Opt in to local-annulus neighbor masking, effective-area checks and
+            mask-growth stability diagnostics. None preserves the original
+            background calculation. Source apertures and per-image FWHM remain
+            unchanged. Instability is reported, not optimized away; insufficient
+            primary background area prevents a measurement. The original noise
+            model is retained and is not calibrated by these diagnostics.
+
         Returns
         -------
         astropy.table.QTable
@@ -504,6 +596,8 @@ class Photometry():
         from ..sources import Sources
 
         if regions is None:
+            if background_options is not None:
+                raise ValueError('background_options requires reviewed regions=... photometry.')
             if isinstance(sources, Sources) or (
                 isinstance(sources, Sequence) and all(isinstance(item, Sources) for item in sources)
             ):
@@ -518,6 +612,7 @@ class Photometry():
             bkg_clip_sigma=bkg_clip_sigma,
             src_detection_sigma=src_detection_sigma,
             hdu=hdu, require_review=require_review,
+            background_options=background_options,
         )
         self.phot_table = table
         if verbose:

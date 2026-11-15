@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from collections.abc import Sequence
 from pathlib import Path
+import json
 import warnings
 
 import astropy.units as u
@@ -22,6 +23,8 @@ from ..calibration._calibration_io import children, paths
 from ..sources import FilterMagnitude, Sources
 from ..sources.filter_magnitude import UPPER_LIMIT_ERROR
 from .regions import PhotometryRegions, PhotometryRegionCollection
+from .local_background import LocalBackgroundOptions, _LocalBackground
+from .background_diagnostics import BackgroundDiagnostic
 
 if TYPE_CHECKING:
     from .photometry import Photometry
@@ -73,6 +76,7 @@ def run_aperture_photometry(
     src_detection_sigma: float,
     hdu: int,
     require_review: bool,
+    background_options: LocalBackgroundOptions | None = None,
 ) -> QTable:
     """Run the old measurement sequence with the new reviewed-file associations.
 
@@ -81,6 +85,8 @@ def run_aperture_photometry(
     with no usable measurements has an undefined instrumental slot. Duplicate
     source/filter measurements are rejected rather than silently overwritten.
     """
+    if background_options is not None and not isinstance(background_options, LocalBackgroundOptions):
+        raise TypeError('background_options must be LocalBackgroundOptions or None.')
     if not isinstance(sources, Sources):
         if not isinstance(sources, Sequence) or isinstance(sources, (str, bytes)):
             raise TypeError("sources must be Sources or a sequence of Sources.")
@@ -126,6 +132,7 @@ def run_aperture_photometry(
         path for child in children(measurer._image_collection) for path in paths(child)
     }
     measurements: list[dict] = []
+    diagnostics = {}
     seen: set[tuple[str, str, str]] = set()
     attempted: dict[tuple[str, str], list[dict]] = {}
     # Reuse data/header/mask for the same frame even when role-specific region
@@ -157,6 +164,11 @@ def run_aperture_photometry(
                     if flags is None or flags.shape != data.shape:
                         raise ValueError("MASK shape must match the primary image.")
                     invalid |= np.asarray(flags, dtype=bool)
+            local_background = (
+                None if background_options is None else _LocalBackground(
+                    data, invalid, header.get('FWHM'), background_options,
+                )
+            )
             last_image = session.image_path
         if u.Unit(header["BUNIT"]) != u.adu:
             raise u.UnitsError(
@@ -237,6 +249,15 @@ def run_aperture_photometry(
                         "annulus_valid_fraction",
                     )
                 },
+                "background_geometric_area": np.nan,
+                "background_on_image_area": np.nan,
+                "background_valid_area": np.nan,
+                "background_source_masked_area": np.nan,
+                "background_area_fraction": np.nan,
+                "background_stability_sigma": np.nan,
+                "background_stability": "not_checked",
+                "background_trials": "[]",
+                "background_warning": "",
                 "is_upper_limit": False,
                 "status": "rejected",
                 "reason": "Rejected during region review.",
@@ -279,12 +300,52 @@ def run_aperture_photometry(
 
             # Retain the original sigma-clipped mean, geometric source area,
             # clipped annulus sum_aper_area, exact sum and background subtraction.
-            mean_bkg, bkg_stats = measurer.estimate_mean_background(
-                data,
-                annulus,
-                clip_sigma=bkg_clip_sigma,
-                mask=invalid,
-            )
+            trials = []
+            if local_background is None:
+                mean_bkg, bkg_stats = measurer.estimate_mean_background(
+                    data, annulus, clip_sigma=bkg_clip_sigma, mask=invalid,
+                )
+            else:
+                bkg_stats, primary = local_background.statistics(
+                    annulus, bkg_clip_sigma, background_options.mask_growth_fwhm,
+                )
+                diagnostic = BackgroundDiagnostic.capture(
+                    local_background, aperture, annulus, bkg_stats,
+                    background_options.mask_growth_fwhm,
+                    {'source_id': info.source_name, 'field': identity[0],
+                     'filter': filter_name, 'image_path': row['image_path'],
+                     'clip_sigma': bkg_clip_sigma},
+                )
+                if diagnostic is not None:
+                    diagnostics[key] = diagnostic
+                    row.update(
+                        background_geometric_area=diagnostic.areas['geometric'],
+                        background_on_image_area=diagnostic.areas['on_image'],
+                        background_valid_area=diagnostic.areas['after_validity'],
+                        background_source_masked_area=diagnostic.areas['after_source_mask'],
+                    )
+                row["background_area_fraction"] = primary['area_fraction']
+                row["n_ann"] = primary['n_ann']
+                row["mean_bkg"] = primary['mean']
+                if not primary['valid']:
+                    row.update(
+                        status="invalid_background",
+                        reason="Insufficient finite effective background area after validity, source masking and clipping.",
+                    )
+                    continue
+                mean_bkg = np.atleast_1d(primary['mean']) * u.adu / u.pix
+                if background_options.mask_neighbors:
+                    for growth in background_options.stability_growth_fwhms:
+                        _, trial = local_background.statistics(annulus, bkg_clip_sigma, growth)
+                        trials.append(trial)
+                    # Invalid/empty candidates must remain explicit; JSON null
+                    # represents unavailable statistics without nonstandard NaN.
+                    row['background_trials'] = json.dumps([
+                        {k: (v if not isinstance(v, float) or np.isfinite(v) else None)
+                         for k, v in t.items()} for t in trials
+                    ], allow_nan=False)
+            if local_background is None:
+                row['background_area_fraction'] = float(np.atleast_1d(bkg_stats.sum_aper_area.value)[0]) / annulus.area
             n_ap = aperture.area * u.pix
             n_ann_eff = bkg_stats.sum_aper_area / u.pix
             if (
@@ -337,6 +398,18 @@ def run_aperture_photometry(
                     reason="Original noise model returned non-finite or non-positive count uncertainty.",
                 )
                 continue
+            if trials:
+                valid_trials = [t for t in trials if t['valid']]
+                shifts = [abs(t['mean'] - float(mean_bkg.value[0])) * aperture.area / row['error_counts'] for t in valid_trials]
+                row['background_stability_sigma'] = max(shifts, default=np.nan)
+                if len(valid_trials) != len(trials):
+                    row['background_stability'] = 'insufficient_area'
+                    row['background_warning'] = 'Some mask-growth trials lack sufficient background area; stability is not established.'
+                elif row['background_stability_sigma'] > background_options.stability_tolerance:
+                    row['background_stability'] = 'unstable'
+                    row['background_warning'] = 'Background changes with mask growth; interpret model significance with caution.'
+                else:
+                    row['background_stability'] = 'stable'
             m_inst, m_inst_error, significance = measurer.counts2mag(
                 src_counts=phot_src,
                 error_counts=error_adu,
@@ -387,11 +460,17 @@ def run_aperture_photometry(
         table[name].unit = u.mag
     for name in ("n_ap", "n_ann"):
         table[name].unit = u.pix
+    for name in ('background_geometric_area', 'background_on_image_area',
+                 'background_valid_area', 'background_source_masked_area'):
+        table[name].unit = u.pix**2
     table["mean_bkg"].unit = u.adu / u.pix
     table.meta.update(
         magnitude_system="instrumental",
         count_convention="average-stack ADU counts; no exposure-time normalization",
         detection_significance=src_detection_sigma,
+    )
+    table.meta['local_background_options'] = (
+        None if background_options is None else background_options.as_dict()
     )
     for identity, result in pending:
         sources.set_magnitudes(
@@ -400,4 +479,5 @@ def run_aperture_photometry(
             source_name=identity[1],
             field_name=identity[0],
         )
+    measurer._background_diagnostics = diagnostics
     return table

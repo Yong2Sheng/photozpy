@@ -561,3 +561,104 @@ def test_sigma_candidates_preserve_explicit_order_and_override_single_sigma(tmp_
     )
     assert calls == [8.5, 5.5]
     assert fits.getheader(target)['REGSIG'] == 5.5
+
+
+@pytest.mark.parametrize('entrypoint', ['register_images', 'Register_images'])
+def test_auto_references_follow_each_fields_collection_order(tmp_path, fake_register, entrypoint):
+    # Deliberately put a calibration first and choose a non-alphabetical order.
+    bias = image(tmp_path, 'bias.fits', IMTYPE='Master Bias')
+    a_g = image(tmp_path, 'a_g.fits')
+    a_i = image(tmp_path, 'a_i.fits', band="SDSS_i'", value=200.)
+    b_g = image(tmp_path, 'b_g.fits', field='field_b')
+    b_z = image(tmp_path, 'b_z.fits', field='field_b', band="SDSS_z'", value=300.)
+    files = ImageFileCollection(
+        location=tmp_path,
+        filenames=[p.name for p in (bias, b_z, a_i, b_g, a_g)], keywords='*',
+    )
+    processor = Registration(files, SARA_CT, overwrite=True)
+    getattr(processor, entrypoint)(reference_images='auto')
+    assert processor.reference_paths == (b_z, a_i)
+    assert len(fake_register) == 2
+    assert fits.getheader(a_g)['REGREF'] == a_i.name
+    assert fits.getheader(b_g)['REGREF'] == b_z.name
+    assert 'ALIGN' not in fits.getheader(bias)
+
+    # Repeating auto with the same order reuses targets without resampling.
+    fake_register.clear()
+    processor.register_images(reference_images='auto')
+    assert not fake_register
+
+
+def test_auto_references_respect_child_boundaries(tmp_path, fake_register):
+    first = image(tmp_path / 'one', 'a.fits')
+    image(tmp_path / 'one', 'b.fits', band="SDSS_r'")
+    second = image(tmp_path / 'two', 'a.fits', band="SDSS_i'")
+    image(tmp_path / 'two', 'b.fits', band="SDSS_z'")
+    processor = Registration(ImageCollectionGroup([first.parent, second.parent]), overwrite=True)
+    processor.register_images(reference_images='auto')
+    assert set(processor.reference_paths) == {first, second}
+    assert len(fake_register) == 2
+
+
+def test_auto_reordered_registered_images_fail_before_writes(tmp_path, fake_register):
+    first = image(tmp_path, 'a.fits')
+    second = image(tmp_path, 'b.fits')
+    Registration(collection(tmp_path), overwrite=True).register_images(reference_images='auto')
+    before = {p: p.read_bytes() for p in (first, second)}
+    reordered = ImageFileCollection(
+        location=tmp_path, filenames=[second.name, first.name], keywords='*',
+    )
+    fake_register.clear()
+    with pytest.raises(ValueError, match='resampled target'):
+        Registration(reordered, overwrite=True).register_images(reference_images='auto')
+    assert not fake_register
+    assert {p: p.read_bytes() for p in before} == before
+
+
+@pytest.mark.parametrize('setting', ['automatic', '', True])
+def test_invalid_reference_mode_fails_before_writes(tmp_path, fake_register, setting):
+    first = image(tmp_path, 'a.fits')
+    before = first.read_bytes()
+    with pytest.raises(TypeError, match='reference_images'):
+        Registration(collection(tmp_path), overwrite=True).register_images(reference_images=setting)
+    assert first.read_bytes() == before
+    assert not fake_register
+
+
+@pytest.mark.parametrize('entrypoint', ['register_images', 'Register_images'])
+def test_discard_input_wcs_only_on_newly_resampled_outputs(tmp_path, fake_register, entrypoint):
+    reference = image(tmp_path / 'input', 'a.fits')
+    target = image(tmp_path / 'input', 'b.fits', band="SDSS_r'")
+    for path in (reference, target):
+        with fits.open(path, mode='update') as hdul:
+            hdul[0].header.update(celestial_header())
+            hdul[0].header['CTYPE1A'] = 'RA---TAN'
+            hdul[0].header['CRPIX1A'] = 4.
+            hdul[0].header['A_ORDER'] = 2
+            hdul[0].header['B_ORDER'] = 2
+            hdul[0].header['B_0_2'] = 1e-5
+            hdul[0].header['A_2_0'] = 1e-5
+    before = {p: p.read_bytes() for p in (reference, target)}
+    output = tmp_path / 'output'
+    processor = Registration(collection(reference.parent), overwrite=True)
+    getattr(processor, entrypoint)(
+        reference_images='auto', discard_input_wcs=True, save_location=output,
+    )
+    assert {p: p.read_bytes() for p in before} == before
+    assert has_wcs(output / reference.name)
+    h = fits.getheader(output / target.name)
+    assert not has_wcs(output / target.name)
+    assert not any(k.startswith(('CTYPE', 'CRPIX', 'CRVAL', 'CDELT', 'PC', 'A_')) for k in h)
+    assert h['FILTER'] == "SDSS_r'"
+    assert h['ALIGN'] == 'Registered'
+    assert h['REGREF'] == reference.name
+    assert 'removed input spatial WCS' in str(h['HISTORY'])
+    # Newly solved WCS survives a repeated run which reuses the existing grid.
+    with fits.open(output / target.name, mode='update') as hdul:
+        hdul[0].header.update(celestial_header())
+    fake_register.clear()
+    Registration(collection(output), overwrite=True).register_images(
+        reference_images='auto', discard_input_wcs=True,
+    )
+    assert not fake_register
+    assert has_wcs(output / target.name)

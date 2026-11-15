@@ -182,3 +182,54 @@ def test_header_updates_require_permission(tmp_path):
     image(tmp_path)
     with pytest.raises(ValueError, match='overwrite=True'):
         FWHM(ImageCollectionGroup(tmp_path)).find_fwhm()
+
+
+@pytest.mark.parametrize('profile', ['moffat_30', 'moffat_100', 'gaussian'])
+def test_high_beta_and_gaussian_widths_are_measured_without_bias(tmp_path, profile):
+    width = 6.
+    if profile == 'gaussian':
+        rng = np.random.default_rng(1041)
+        yy, xx = np.mgrid[:640, :640]
+        data = 500. + rng.normal(0, 2., xx.shape)
+        positions = [(x, y) for y in (65.3, 180.1, 307.2, 420.1, 540.2)
+                     for x in (66.2, 180.4, 306.3, 420.2, 540.3)]
+        for i, (x, y) in enumerate(positions):
+            data += (1000. + 100 * i) * np.exp(-4 * np.log(2) * ((xx - x)**2 + (yy - y)**2) / width**2)
+    else:
+        data, _ = star_field(width=width, beta=float(profile.split('_')[1]))
+    path = image(tmp_path, data=data)
+    before = path.read_bytes()
+    estimator = FWHM(ImageCollectionGroup(tmp_path))
+    estimator.find_fwhm(write_fwhm=False)
+    assert not estimator.failed_paths
+    assert estimator.results['fwhm'][0] == pytest.approx(width, rel=0.03)
+    table = estimator.star_measurements
+    checked = table[(table['fit_method'] == 'fixed_beta_stable') & table['accepted']]
+    assert len(checked) >= 5
+    assert np.all(checked['width_stability'] <= 0.05)
+    assert np.all(checked['beta'] == 100.)
+    assert path.read_bytes() == before
+
+
+def test_high_beta_unstable_widths_do_not_produce_frame_measurement(tmp_path, monkeypatch):
+    import photozpy.photometry.fwhm as module
+    original = module.least_squares
+
+    def unstable(*args, **kwargs):
+        fit = original(*args, **kwargs)
+        if len(fit.x) == 5:
+            # Different converged trial widths must not be accepted just
+            # because each optimizer reports success.
+            unstable.calls += 1
+            fit.x[3] *= 1.2 if unstable.calls % 3 == 0 else 1.
+        return fit
+
+    unstable.calls = 0
+    monkeypatch.setattr(module, 'least_squares', unstable)
+    path = image(tmp_path, width=6., beta=100.)
+    before = path.read_bytes()
+    estimator = FWHM(ImageCollectionGroup(tmp_path))
+    estimator.find_fwhm(write_fwhm=False)
+    assert estimator.failed_paths
+    assert 'high_beta_width_unstable' in estimator.star_measurements['reason']
+    assert path.read_bytes() == before

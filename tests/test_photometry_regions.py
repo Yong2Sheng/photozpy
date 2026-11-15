@@ -741,3 +741,27 @@ def test_collection_and_isolated_worker_forward_deletion_sync(tmp_path, monkeypa
     reviewer = RegionReviewer(batch.sessions, isolated=True, sync_deletions=True)
     reviewer.run()
     assert worker.call_args.kwargs['sync_deletions'] is True
+
+
+@pytest.mark.usefixtures('fake_tkinter')
+def test_display_reset_keeps_unsaved_edits_and_navigation_state(tmp_path):
+    path, sources = inputs(tmp_path)
+    session = PhotometryRegions.generate(path, sources, root=tmp_path)
+    adapter = Mock(spec=DS9Adapter)
+    reviewer = RegionReviewer([session], adapter=adapter, isolated=False)
+    reviewer.show_current()
+    adapter.reset_display.assert_called_once_with()
+    adapter.reset_mock()
+    original_files = {p: p.read_bytes() for p in (path, session.aperture_path, session.background_path)}
+    reviewer.reset_display()
+    adapter.reset_display.assert_called_once_with()
+    adapter.load_fits.assert_not_called()
+    adapter.clear_regions.assert_not_called()
+    adapter.load_region.assert_not_called()
+    adapter.add_regions.assert_not_called()
+    assert reviewer.index == 0
+    assert {p: p.read_bytes() for p in original_files} == original_files
+    adapter.reset_display.side_effect = RuntimeError('DS9 unavailable')
+    reviewer.reset_display()
+    assert not reviewer.error_message
+    assert reviewer.index == 0

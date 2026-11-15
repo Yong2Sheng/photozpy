@@ -24,6 +24,9 @@ class RegionReviewer(ImagePreviewer):
     No science image is moved or written, and no source magnitude is changed.
     Same-source/group filter transitions preserve zoom and image-coordinate
     pan, including Previous. First display and target/field changes zoom to fit.
+    First load resets contrast/bias and uses global zscale/asinh. Reset display
+    restores these settings without reloading the image or altering regions;
+    later manual display choices remain until explicitly reset.
     """
 
     target_name = "photozpy-region-review"
@@ -39,6 +42,7 @@ class RegionReviewer(ImagePreviewer):
         self.sessions = tuple(sessions)
         self.sync_deletions = sync_deletions
         self._display_group: tuple | None = None
+        self._display_initialized = False
         if not self.sessions:
             raise ValueError("At least one region session is required.")
         super().__init__(
@@ -49,6 +53,10 @@ class RegionReviewer(ImagePreviewer):
         if not self._isolated:
             self.root.title("Photozpy Aperture / Annulus Review")
             self.good_button.config(text="Save & Next")
+            self.reset_display_button = tk.Button(
+                self.root, text="Reset display", command=self.reset_display,
+            )
+            self.reset_display_button.pack(padx=12, pady=(0, 12))
 
     def _load_image(self, path: Path) -> None:
         """Preserve the user's view only within the same field/source group."""
@@ -59,10 +67,24 @@ class RegionReviewer(ImagePreviewer):
         )
         try:
             self.adapter.load_fits(path, preserve_view=group == self._display_group)
+            if not self._display_initialized:
+                self.adapter.reset_display()
+                self._display_initialized = True
         except Exception:
             self._display_group = None
             raise
         self._display_group = group
+
+    def reset_display(self) -> None:
+        """Recover from extreme contrast/bias without losing region edits."""
+        self._require_local_gui()
+        if self.index >= len(self.sessions) or not self._display_initialized:
+            return
+        try:
+            self.adapter.reset_display()
+        except Exception as error:
+            # A display-only failure must not block navigation or saving edits.
+            self.error_label.config(text=f"Display reset failed: {error}", fg="firebrick")
 
     def show_current(self) -> None:
         """Display the image, both editable files, and immutable initial crosses."""

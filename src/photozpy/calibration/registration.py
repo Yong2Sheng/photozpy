@@ -14,7 +14,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
 import logging
+import re
 from pathlib import Path
+from typing import Literal
 
 from astroalign import MaxIterError, apply_transform, find_transform, register
 from astropy.io import fits
@@ -43,6 +45,7 @@ class _RegistrationPlan:
     reference_image_path: Path
     reference_hash: str
     destinations: dict[Path, Path]
+    discard_input_wcs: bool = False
 
 
 class Registration:
@@ -74,9 +77,9 @@ class Registration:
     CMASK is used for star detection only and resampled separately for inspection.
     It never becomes the output validity MASK. Footprints and existing validity
     masks are saved as MASK. Unrelated
-    FITS extensions, uncertainty arrays, and pre-existing spatial WCS on images
-    to be resampled are rejected before writing: they need their own explicit
-    transformation model. For this pipeline, solve WCS on Master Light later.
+    FITS extensions, uncertainty arrays, and (by default) pre-existing spatial
+    WCS on targets are rejected before writing. discard_input_wcs=True removes
+    old WCS on newly resampled outputs for workflows solving Master WCS later.
     An unresampled reference may retain its own valid WCS.
 
     ALIGN retains the original Reference/Registered values. REGREF and REFHASH
@@ -122,9 +125,10 @@ class Registration:
         detection_sigma: float = 5,
         *,
         detection_sigmas: Sequence[float] | None = None,
-        reference_images: Mapping[str, str | Path] | None = None,
+        reference_images: Mapping[str, str | Path] | Literal['auto'] | None = None,
         save_location: str | Path | None = None,
         overwrite: bool | None = None,
+        discard_input_wcs: bool = False,
     ) -> ImageInput:
         """Register each FIELD, returning working images with masks and markers.
 
@@ -159,8 +163,15 @@ class Registration:
             Exhausting the list raises RuntimeError without writing the target.
             None retains the single detection_sigma behavior. Successful targets
             record the actual threshold in the FITS header REGSIG.
-        reference_images : mapping of str to path, or None, optional
-            FIELD-to-specific-FITS mapping, for example
+        reference_images : mapping of str to path, "auto", or None, optional
+            Use 'auto' to select the first selected Light image of each FIELD
+            in collection order, separately within each child directory. All
+            filters in that field align to this reference; no quality ranking
+            or reference_filter restriction is applied in auto mode. The chosen
+            filename is logged and available in reference_paths. Existing
+            registration must still match it; auto never changes an old grid
+            silently if collection order or selection has changed.
+            Alternatively, supply a FIELD-to-specific-FITS mapping, for example
             {'science_field': analysis_dir / 'science_i_003.fits'}.
             Pick one selected Light image per field; all other exposures and
             filters in that field align to its grid. The reference's pixels are
@@ -179,6 +190,14 @@ class Registration:
         overwrite : bool or None, optional
             Override the constructor's overwrite policy. This does not permit
             silently resampling an image already tied to another reference.
+
+        discard_input_wcs : bool, optional
+            Default False rejects WCS-bearing targets before writing. Set True
+            to remove old spatial WCS (including alternate solutions and SIP)
+            from newly resampled output headers. Original input files are not
+            separately edited; in-place registration replaces working copies.
+            The unresampled reference and reused targets retain their WCS.
+            Solve WCS on the registered/stacked images before sky-coordinate use.
 
         Returns
         -------
@@ -222,6 +241,7 @@ class Registration:
             reference_images=reference_images,
             save_location=save_location,
             overwrite=overwrite,
+            discard_input_wcs=discard_input_wcs,
         )
 
     def Register_images(
@@ -231,9 +251,10 @@ class Registration:
         detection_sigma: float = 5,
         *,
         detection_sigmas: Sequence[float] | None = None,
-        reference_images: Mapping[str, str | Path] | None = None,
+        reference_images: Mapping[str, str | Path] | Literal['auto'] | None = None,
         save_location: str | Path | None = None,
         overwrite: bool | None = None,
+        discard_input_wcs: bool = False,
     ) -> ImageInput:
         """Retain the original entry point; see register_images for its contract.
 
@@ -258,9 +279,11 @@ class Registration:
                 name = 'detection_sigma' if detection_sigmas is None else 'detection_sigmas'
                 raise ValueError(f'{name} must contain only positive finite numbers.')
 
+        if not isinstance(discard_input_wcs, bool):
+            raise TypeError('discard_input_wcs must be a bool.')
         replace: bool = self._overwrite if overwrite is None else overwrite
         plans: list[_RegistrationPlan] = self._plan_groups(
-            filter, reference_images, save_location, replace,
+            filter, reference_images, save_location, replace, discard_input_wcs,
         )
         replacements: dict[Path, Path] = {}
 
@@ -285,20 +308,23 @@ class Registration:
     def _plan_groups(
         self,
         reference_filter: str | None,
-        reference_images: Mapping[str, str | Path] | None,
+        reference_images: Mapping[str, str | Path] | Literal['auto'] | None,
         save_location: str | Path | None,
         overwrite: bool,
+        discard_input_wcs: bool = False,
     ) -> list[_RegistrationPlan]:
         """Validate all fields and destinations before the first output write."""
         refresh(self._image_collection)
-        if reference_filter is not None:
+        automatic = isinstance(reference_images, str) and reference_images == 'auto'
+        if reference_filter is not None and not automatic:
             reference_filter = self._filter_name(reference_filter)
 
-        if reference_images is not None and not isinstance(reference_images, Mapping):
-            raise TypeError('reference_images must map FIELD names to FITS paths.')
+        if reference_images is not None and not automatic and not isinstance(reference_images, Mapping):
+            raise TypeError("reference_images must be 'auto', a FIELD-to-FITS mapping, or None.")
 
         explicit: dict[str, Path] = {}
-        for field_name, supplied_path in (reference_images or {}).items():
+        references = reference_images if isinstance(reference_images, Mapping) else {}
+        for field_name, supplied_path in references.items():
             if not isinstance(field_name, str) or not field_name.strip():
                 raise ValueError('Reference keys must be nonempty FIELD names.')
 
@@ -344,9 +370,11 @@ class Registration:
                     if align not in (None, '', 'Reference', 'Registered'):
                         raise ValueError(f'{path.name}: unsupported ALIGN state {align!r}.')
 
-                # Retain the original reference-filter strategy, but make the
-                # default order deterministic and respect an existing reference.
-                if field_name in explicit:
+                # Auto follows collection order; explicit/filter choices retain
+                # their existing behavior and all reference-identity checks.
+                if automatic:
+                    reference_image_path = image_paths[0]
+                elif field_name in explicit:
                     reference_image_path = explicit[field_name]
                     if reference_image_path not in image_paths:
                         raise ValueError(
@@ -395,15 +423,16 @@ class Registration:
                     ):
                         # A transformed array cannot retain an old spatial WCS.
                         # This first pipeline stage expects solving after stacking.
-                        if has_wcs(path) or any(
+                        if not discard_input_wcs and (has_wcs(path) or any(
                             key.startswith(('CTYPE', 'CRPIX', 'CRVAL', 'CDELT', 'CROTA'))
                             or key in ('CD1_1', 'CD1_2', 'CD2_1', 'CD2_2',
                                        'PC1_1', 'PC1_2', 'PC2_1', 'PC2_2')
                             for key in header
-                        ):
+                        )):
                             raise ValueError(
                                 f'{path.name}: spatial WCS needs explicit transformation; '
-                                'use pre-WCS images for this registration stage.'
+                                'use pre-WCS images or set discard_input_wcs=True and solve '
+                                'WCS again after registration/stacking.'
                             )
 
                     destination = path if output_dir is None else output_dir / path.name
@@ -420,6 +449,7 @@ class Registration:
                     reference_image_path=reference_image_path,
                     reference_hash=reference_hash,
                     destinations=destinations,
+                    discard_input_wcs=discard_input_wcs,
                 ))
 
         if not plans:
@@ -432,6 +462,30 @@ class Registration:
             raise ValueError('Multiple registration inputs map to the same output path.')
         check_destinations(write_destinations, overwrite)
         return plans
+
+    @staticmethod
+    def _without_spatial_wcs(header: fits.Header) -> fits.Header:
+        """Remove primary/alternate spatial WCS and SIP from a resampled output.
+
+        Keep observation metadata (e.g. RA/DEC pointing), photometric headers,
+        and the original input file. The output deliberately needs plate solving.
+        """
+        result = header.copy()
+        pattern = re.compile(
+            r'(?:(?:WCSAXES|WCSNAME|LONPOLE|LATPOLE|RADESYS|RADECSYS|EQUINOX)[A-Z]?'
+            r'|(?:CTYPE|CUNIT|CRPIX|CRVAL|CDELT|CROTA|CNAME|CRDER|CSYER)\d+[A-Z]?'
+            r'|(?:PC|CD|PV|PS)\d+_\d+[A-Z]?'
+            r'|(?:A|B|AP|BP)_(?:ORDER|DMAX|\d+_\d+)'
+            r'|(?:CPDIS|CQDIS|D2IMDIS)\d+|(?:DP|DQ|D2IM)\d+\..+)'
+        )
+        removed = False
+        for key in list(result):
+            if pattern.fullmatch(key):
+                del result[key]
+                removed = True
+        if removed:
+            result.add_history('Registration removed input spatial WCS after resampling; solve WCS again.')
+        return result
 
     def _filter_name(self, name: str) -> str:
         """Resolve the reference band without depending on legacy Telescope."""
@@ -637,6 +691,9 @@ class Registration:
                 mask = np.asarray(footprint, dtype=bool) | ~np.isfinite(img_aligned)
                 if np.all(mask):
                     raise RuntimeError(f'{path.name}: registration has no valid coverage.')
+
+                if plan.discard_input_wcs:
+                    header_target = Registration._without_spatial_wcs(header_target)
 
                 header_target['REGSIG'] = (sigma, 'Detection sigma used for registration')
                 header_target['ALIGN'] = 'Registered'
