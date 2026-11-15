@@ -53,6 +53,8 @@ class Combine:
     np.ma.median center, mad_std deviation, default 5-sigma thresholds, and
     float32 calculation. Flat inputs are scaled by inverse median by default,
     before sigma clipping so differing sky levels do not hide outliers.
+    Registered Light frames can instead use method='average' to disable
+    pixel-value rejection while retaining input validity masks.
     A single input is copied without this multi-image scaling, as before.
 
     Bias/Dark grouping uses IMTYPE, Flat uses FILTER, and registered Light uses
@@ -218,7 +220,9 @@ class Combine:
         image_type : {'Flat', 'Light'}
             Type to combine. This method does not register light images.
         method : str, optional
-            Only 'sigma clip' is supported.
+            Default 'sigma clip' averages after sigma clipping. For Light only,
+            'average' computes an arithmetic mean without pixel-value clipping.
+            Input validity masks still apply. Flat retains 'sigma clip' only.
         scale_function : 'auto', callable, or None, optional
             For Flat, 'auto' retains inverse-median scaling; a callable supplies
             an explicit positive finite scale, and None disables input scaling.
@@ -226,7 +230,8 @@ class Combine:
             groups are copied without scaling, as in the old implementation.
             Light combinations are unscaled, preserving the original behavior.
         sigma_clip_low, sigma_clip_high : float, optional
-            Positive clipping thresholds; defaults are both 5.
+            Positive clipping thresholds; defaults are both 5. Ignored for
+            method='average'.
         save_location : str, Path, or None, optional
             Output directory; None or '' writes beside each child input.
         quite : bool, optional
@@ -252,13 +257,22 @@ class Combine:
         before being passed to ccdproc. Unlike passing scale= to ccdproc 2.5.1,
         this makes rejection operate on normalized pixels. No normalized
         intermediate FITS files are written or raw inputs modified.
+
+        Light method='average' applies no sky matching, flux rescaling, or
+        weighting. It can retain residual cosmic rays or other unmasked defects;
+        inspect cleaned inputs before use. NCOMBINE records the input count,
+        not a per-pixel coverage map. COMBMETH records the selected method, or
+        'copy' for a single input. Existing masters must be explicitly replaced.
         """
         if image_type not in ('Flat', 'Light'):
             raise ValueError('image_type must be Flat or Light.')
         if scale_function != 'auto' and scale_function is not None and not callable(scale_function):
             raise TypeError("scale_function must be 'auto', callable, or None.")
 
-        self._validate_method(method, sigma_clip_low, sigma_clip_high)
+        self._validate_method(
+            method, sigma_clip_low, sigma_clip_high,
+            allow_average=image_type == 'Light',
+        )
         refresh(self._image_collection)
         plans: list[CombinePlan] = []
 
@@ -297,13 +311,19 @@ class Combine:
         return self._execute(
             plans, image_type, sigma_clip_low, sigma_clip_high,
             scale_function=scale_function_, quite=quite, overwrite=overwrite,
+            method=method,
         )
 
     @staticmethod
-    def _validate_method(method: str, low: float, high: float) -> None:
+    def _validate_method(
+        method: str, low: float, high: float, *, allow_average: bool = False,
+    ) -> None:
         """Reject unimplemented methods and invalid thresholds before writing."""
+        if method == 'average' and allow_average:
+            return
         if method != 'sigma clip':
-            raise ValueError("Only method='sigma clip' is implemented.")
+            choices = "'sigma clip' or 'average'" if allow_average else "'sigma clip'"
+            raise ValueError(f'method must be {choices}; average is supported for Light only.')
         if not np.isfinite(low) or not np.isfinite(high) or low <= 0 or high <= 0:
             raise ValueError('Sigma-clipping thresholds must be positive and finite.')
 
@@ -405,8 +425,9 @@ class Combine:
         scale_function: ScaleFunction | None,
         quite: bool,
         overwrite: bool | None,
+        method: str = 'sigma clip',
     ) -> ImageInput:
-        """Report exact inputs, run the original recipe, and publish masters.
+        """Report exact inputs, run the selected recipe, and publish masters.
 
         Unless quite=True, log the count, wrapped input filenames, output
         filename, and completion at INFO level. Group titles identify FILTER
@@ -447,6 +468,7 @@ class Combine:
                     action, image_number, image_type, frame_label,
                     destination.name, input_names,
                 )
+                logger.info('Combination method: %s', 'copy' if image_number == 1 else method)
 
             # Keep the single-image copy path. For multiple flats, apply the
             # chosen scale before clipping; other recipes retain their order.
@@ -477,7 +499,7 @@ class Combine:
                 combined = ccdpro_combine(
                     image_list_to_combine,
                     method='average',
-                    sigma_clip=True,
+                    sigma_clip=method == 'sigma clip',
                     sigma_clip_low_thresh=sigma_clip_low,
                     sigma_clip_high_thresh=sigma_clip_high,
                     sigma_clip_func=np.ma.median,
@@ -487,6 +509,10 @@ class Combine:
 
             combined.meta['IMTYPE'] = f'Master {image_type}'
             combined.meta['NCOMBINE'] = image_number
+            combined.meta['COMBMETH'] = (
+                'copy' if image_number == 1 else method,
+                'Method used to build this master',
+            )
             if filter_name is not None:
                 combined.meta['FILTER'] = filter_name
             if field_name is not None:

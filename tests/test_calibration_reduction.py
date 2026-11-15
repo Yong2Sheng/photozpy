@@ -131,6 +131,90 @@ def test_registered_light_grouping_uses_field_not_object(tmp_path):
     np.testing.assert_allclose(contents(tmp_path / 'Master_field_b_g.fits'), 9)
 
 
+def test_average_light_retains_values_and_flux_across_different_skies(tmp_path):
+    originals = {}
+    arrays = []
+    for index, sky in enumerate((100., 200., 300., 400., 500.)):
+        data = np.full((4, 4), sky)
+        data[1, 1] += 30.  # The same source signal in every exposure.
+        if index == 4:
+            data[0, 0] += 10000.  # Explicit average must not clip this value.
+        arrays.append(data)
+        path = image(
+            tmp_path, f'light_{index}.fits', 'Light', data,
+            FILTER='g', FIELD='target', EXPTIME=100.,
+            ALIGN='Registered', REGREF='light_0.fits', REFHASH='same_grid',
+        )
+        originals[path] = path.read_bytes()
+
+    combiner = Combine(collection(tmp_path))
+    result = combiner.combine_light_or_flat('Light', method='average', quite=True)
+    master = combiner.master_paths[0]
+    np.testing.assert_allclose(contents(master), np.mean(arrays, axis=0))
+    assert contents(master)[1, 1] - contents(master)[2, 2] == 30.
+    assert fits.getheader(master)['COMBMETH'] == 'average'
+    assert fits.getheader(master)['NCOMBINE'] == 5
+    assert contents(master).dtype.itemsize == 4
+    assert master.name in result.files
+    assert {path: path.read_bytes() for path in originals} == originals
+
+    # The historical default remains sigma-clipped average.
+    Combine(collection(tmp_path), overwrite=True).combine_light_or_flat('Light', quite=True)
+    assert fits.getheader(master)['COMBMETH'] == 'sigma clip'
+    assert contents(master)[0, 0] == 250.
+
+
+def test_average_light_preserves_validity_masks_and_uses_cleaned_cosmic_pixels(tmp_path):
+    originals = {}
+    for index, value in enumerate((10., 20., 40.)):
+        data = np.full((2, 2), value)
+        mask = np.zeros((2, 2), dtype=bool)
+        mask[1, 1] = True  # No exposure covers this pixel.
+        if index == 0:
+            data[0, 1] = 1e9
+            mask[0, 1] = True
+        path = tmp_path / f'light_{index}.fits'
+        ccd = CCDData(data, mask=mask, unit=u.adu, meta={
+            'IMTYPE': 'Light', 'FILTER': 'g', 'FIELD': 'target',
+            'ALIGN': 'Registered', 'REGREF': 'light_0.fits', 'REFHASH': 'same_grid',
+            'CRCORR': 'Yes',
+        })
+        ccd.write(path)
+        with fits.open(path, mode='update') as hdul:
+            cmask = np.zeros((2, 2), dtype=np.uint8)
+            cmask[0, 0] = 1  # A cleaned pixel is valid, despite its CR history.
+            hdul.append(fits.ImageHDU(cmask, name='CMASK'))
+        originals[path] = path.read_bytes()
+
+    combiner = Combine(collection(tmp_path))
+    combiner.combine_light_or_flat('Light', method='average', quite=True)
+    master = CCDData.read(combiner.master_paths[0])
+    np.testing.assert_allclose(master.data[0, 0], 70 / 3, rtol=1e-6)
+    assert master.data[0, 1] == 30.
+    assert master.mask[1, 1]
+    assert not master.mask[0, 0] and not master.mask[0, 1]
+    assert master.uncertainty is None
+    assert {path: path.read_bytes() for path in originals} == originals
+
+
+@pytest.mark.parametrize('kind', ['Bias', 'Dark', 'Flat'])
+def test_average_is_explicitly_limited_to_science_lights(tmp_path, kind):
+    image(tmp_path, 'input.fits', kind, 10., FILTER='g', EXPTIME=100.)
+    combiner = Combine(collection(tmp_path))
+    method = combiner.combine_light_or_flat if kind == 'Flat' else combiner.combine_bias_or_dark
+    with pytest.raises(ValueError, match='Light only'):
+        method(kind, method='average', quite=True)
+    assert not list(tmp_path.glob('Master*.fits'))
+
+
+def test_average_light_still_requires_a_common_registered_grid(tmp_path):
+    for index in range(2):
+        image(tmp_path, f'light_{index}.fits', 'Light', 10., FILTER='g', FIELD='target')
+    with pytest.raises(ValueError, match='register Light'):
+        Combine(collection(tmp_path)).combine_light_or_flat('Light', method='average', quite=True)
+    assert not list(tmp_path.glob('Master*.fits'))
+
+
 def test_bias_flag_is_written_only_to_corrected_copy(tmp_path):
     raw, out = tmp_path / 'analysis', tmp_path / 'alternate_output'
     master = image(raw, 'Master_Bias.fits', 'Master Bias', 10)
