@@ -344,10 +344,26 @@ $$
 计算零点，程序不会静默继续用旧值。如果未算过零点，`calibrate_targets` 会
 先按默认参数计算；正式 notebook 仍推荐保留前面的计算与检查 cell。
 
-`show_magnitudes` 按 source 显示名字、field、system 和四列紧凑结果，复用
+`show_magnitudes` 默认按 source 显示名字、ICRS RA/Dec、field、system 和四列紧凑结果，复用
 `FilterMagnitude.to_table()`。缺失值为 `--`，upper-limit error 为 `UL (-99)`。
 这个方法只展示，不修改或重新计算。完整 DataFrame 保留在 `calibrated_table`，
 供详细检查和导出。
+
+复制到 Google Sheets 时使用独立复制框，每个 source 对应四行 griz：
+
+```python
+sources.show_magnitudes(kind="calibrated", format="google_sheets")
+```
+
+上方的 RA/Dec 框用一个空格连接两个坐标，粘贴到同一个单元格；下方数据框按 obs mag、STD correction、
+corrected mag、error、Detection σ 五列排列，整块粘贴到该 source 的 g 行
+obs mag 单元格即可。STD correction 是已保存的 calibrated 减 instrumental，
+不重新定标；缺失数据留空，上限 error 保留数值 `-99.0000`。
+可展开按列复制区，只复制一个数值列。若按钮受 notebook 限制，在框内使用
+Cmd/Ctrl+A、Cmd/Ctrl+C，同样只会选中该框的内容。
+
+`columns=("magnitude", "error")` 可改成只包含 corrected mag 和 error 的
+四行两列块。`format="tsv"` 则保留原始制表符文本导出。
 
 ```python
 # Inspect instrumental measurements with the same layout if needed.

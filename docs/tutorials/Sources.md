@@ -127,11 +127,65 @@ sources.by_role("standard").show_magnitudes(kind="reference")
 ```
 
 The method prints sources in collection order and returns None. Each block shows
-the source name, observation field, magnitude system and the existing
+the source name, ICRS RA (hours) and signed Dec (degrees) in sexagesimal notation,
+observation field, magnitude system and the existing
 FilterMagnitude.to_table output. Missing filter values appear as `--`, and
 upper-limit error flags as `UL (-99)`. Undefined result slots are reported
 without creating measurements. Display does not perform photometry/calibration,
 alter values, or write files. The default kind is `"calibrated"`.
+RA and Dec appear together on one line, separated by a single space, so the
+coordinate pair can be copied together into one spreadsheet cell.
+
+For a Google Sheets layout with four griz rows per source, use notebook copy
+controls rather than dragging a column out of printed text:
+
+```python
+sources.show_magnitudes(kind="calibrated", format="google_sheets")
+```
+
+Each source gets one heading, a source-name copy box and button, a horizontal
+RA/Dec copy box, and a four-row data
+box in this order: `obs mag`, `STD correction`, `corrected mag`, `error`,
+`Detection σ`. Copy the whole data box and paste into the g-row cell under
+`obs mag`. Headers and filter labels are outside the copy box. SDSS telescopes
+use griz by default in this mode; other telescopes use their full filter order.
+Explicit `filters` still selects names/aliases in the requested order.
+
+`obs mag` comes from the stored instrumental result. `STD correction` is the
+stored calibrated magnitude minus the stored instrumental magnitude, formatted
+to six decimals. It is the difference between these results, not a fresh
+standard-star calculation. Missing inputs leave those cells blank. Calibrated
+magnitudes/errors use four decimals; significance uses two. Upper-limit errors
+remain numeric `-99.0000`. No result is recalculated or changed.
+
+Expand **Copy individual columns** to copy just one numerical column vertically.
+Buttons copy a box's entire contents; if notebook scripts are disabled, click
+inside the desired box and use Cmd/Ctrl+A, then Cmd/Ctrl+C. This selection is
+confined to that box. The RA/Dec copy box contains one space-separated coordinate
+pair, without a tab, newline or apostrophe prefix, for pasting into a single
+cell. Explicit `columns=("ra", "dec")` and raw TSV still provide separate fields
+when those are specifically requested.
+
+For a smaller block matching only the corrected-mag and error columns:
+
+```python
+sources.show_magnitudes(
+    format="google_sheets",
+    filters=("SDSS_g", "SDSS_r", "SDSS_i", "SDSS_z"),
+    columns=("magnitude", "error"),
+)
+```
+
+Explicit `columns` selects fields from the requested `kind`, rather than the
+five-column calibration layout. For `kind="instrumental"` or `"reference"`,
+the default copy box contains magnitude, error and significance.
+
+`format="tsv"` retains plain tab-separated text with one row per source/filter.
+Its default columns are `source_name`, `ra`, `dec`, `field_name`,
+`magnitude_system`, `filter`, `magnitude`, `error`, and `significance`.
+`columns` selects and reorders them; `include_header=False` omits TSV headers.
+Notebook copy boxes always exclude headers. Missing measurements keep blank
+cells and preserve row positions in both spreadsheet modes.
 
 This is a new API, not a compatibility layer for the legacy Sources class.
 Legacy consumers still need their own migration; refactored photometry accepts

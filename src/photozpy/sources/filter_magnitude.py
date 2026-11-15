@@ -196,12 +196,14 @@ class FilterMagnitude:
         """Return the detection-significance column aligned to ``filter_names``."""
         return self.qtable["significance"]
 
-    def to_table(self) -> str:
+    def to_table(self, *, filters: Sequence[str] | None = None) -> str:
         """Format the complete magnitude information as a readable table.
 
         Missing values are displayed as ``--``. Errors equal to
         :data:`UPPER_LIMIT_ERROR` are displayed as ``UL (-99)`` without changing
         the underlying QTable values.
+        ``filters`` optionally selects filter names or aliases in the requested
+        order; None displays all telescope filters.
 
         Returns
         -------
@@ -211,11 +213,18 @@ class FilterMagnitude:
         """
         rows = []
 
+        indices = (
+            list(range(len(self.filter_names))) if filters is None else [
+                self.filter_names.index(self.telescope.resolve_filter_alias(name))
+                for name in filters
+            ]
+        )
+
         for filter_name, magnitude, error, significance in zip(
-            self.filter_names,
-            self.magnitudes.to_value(u.mag),
-            self.errors.to_value(u.mag),
-            self.significance,
+            [self.filter_names[index] for index in indices],
+            self.magnitudes.to_value(u.mag)[indices],
+            self.errors.to_value(u.mag)[indices],
+            self.significance[indices],
         ):
             magnitude_text = (
                 "--" if np.isnan(magnitude)

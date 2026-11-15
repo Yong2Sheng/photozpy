@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
+import csv
+from io import StringIO
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Self, TypeAlias
 
@@ -288,42 +291,153 @@ class Sources:
                 )
         self._magnitudes[self._key(info)][kind] = magnitudes
 
-    def show_magnitudes(self, *, kind: MagnitudeKind = "calibrated") -> None:
+    def show_magnitudes(
+        self,
+        *,
+        kind: MagnitudeKind = "calibrated",
+        format: Literal["table", "google_sheets", "tsv"] = "table",
+        filters: Sequence[str] | None = None,
+        columns: Sequence[str] | None = None,
+        include_header: bool = True,
+    ) -> None:
         """Print one compact magnitude summary per source in collection order.
 
         Parameters
         ----------
         kind : {"instrumental", "reference", "calibrated"}, optional
             Result slot to display. Default is ``"calibrated"``.
+        format : {"table", "google_sheets", "tsv"}, optional
+            Default ``"table"`` retains the readable per-source summaries.
+            ``"google_sheets"`` displays notebook copy boxes, one per source,
+            matching a vertical griz spreadsheet. ``"tsv"`` prints raw TSV.
+        filters : sequence of str or None, optional
+            Filter names or telescope aliases in the desired row order, for
+            example ("SDSS_g", "SDSS_r", "SDSS_i", "SDSS_z"). None uses all
+            telescope filters, except Google Sheets defaults to griz on SDSS
+            telescopes. Sources remain in collection order.
+        columns : sequence of str or None, optional
+            Spreadsheet columns, in order. Choices are source_name, ra, dec,
+            field_name, magnitude_system, filter, magnitude, error, significance.
+            None includes all for TSV. Google Sheets defaults to instrumental
+            magnitude, applied correction, calibrated magnitude, error and
+            significance for calibrated results. Explicit columns select the
+            chosen result's fields instead. Only for spreadsheet output.
+        include_header : bool, optional
+            Include column names in raw TSV output. Default True. Notebook
+            copy boxes always exclude headers so they paste into data cells.
 
         Notes
         -----
-        Show the source name and field once, followed by the magnitude-system
+        Show the source name, ICRS RA/Dec (sexagesimal, on one space-separated
+        line), and field once,
+        followed by the magnitude-system
         label and FilterMagnitude.to_table's filter, magnitude, error and
         significance columns. Missing values remain ``--`` and upper-limit
         errors retain the existing ``UL (-99)`` display. An undefined result
         is reported explicitly without creating a placeholder measurement.
+
+        Spreadsheet output uses one row per source/filter, blank cells for
+        missing measurements, four decimals for magnitudes/errors, and two
+        for significance. Upper-limit errors remain the numeric sentinel -99.
+        Undefined results retain their filter rows with blank measurements.
+        RA uses hours and Dec uses signed degrees, both in ICRS.
+        Google Sheets copy boxes keep metadata separate from measurement cells.
+        Their STD correction is the stored calibrated magnitude minus the stored
+        instrumental magnitude (six decimals), blank when either is missing.
+        Buttons and manual selection copy only the contents of the chosen box.
 
         This method only formats existing results. It does not calculate,
         calibrate, modify or save measurements. Use selections such as
         ``by_role("science")`` before calling to restrict the displayed sources.
         """
         self._check_kind(kind)
+        if format not in ("table", "google_sheets", "tsv"):
+            raise ValueError("format must be 'table', 'google_sheets', or 'tsv'.")
+        available_columns = (
+            "source_name", "ra", "dec", "field_name", "magnitude_system",
+            "filter", "magnitude", "error", "significance",
+        )
+        selected_columns = available_columns if columns is None else tuple(columns)
+        if not selected_columns or any(
+            c not in available_columns for c in selected_columns
+        ):
+            raise ValueError(f"columns must select from {available_columns!r}.")
+        if format == "table" and (columns is not None or not include_header):
+            raise ValueError("columns and include_header=False require spreadsheet output.")
+        if isinstance(filters, str):
+            raise TypeError("filters must be a sequence of filter names, not a string.")
+        selected_filters = None if filters is None else tuple(filters)
+        if selected_filters is not None and not selected_filters:
+            raise ValueError("filters must contain at least one filter.")
+        if format == "google_sheets":
+            from ._magnitude_display import show_google_sheets
+
+            show_google_sheets(self, kind, selected_filters, columns)
+            return
         summaries: list[str] = []
+        spreadsheet = StringIO()
+        writer = csv.writer(spreadsheet, delimiter="\t", lineterminator="\n")
+        if include_header:
+            writer.writerow(selected_columns)
 
         for info in self._source_infos:
             magnitudes = self._magnitudes[self._key(info)][kind]
+            telescope = info.observation_field.telescope
+            filter_names = (
+                telescope.filters() if selected_filters is None else tuple(
+                    telescope.resolve_filter_alias(name) for name in selected_filters
+                )
+            )
+            if len(set(filter_names)) != len(filter_names):
+                raise ValueError("filters must resolve to distinct telescope filters.")
+            coordinate = info.source_coordinate.icrs
+            ra = coordinate.ra.to_string(
+                unit="hourangle", sep=":", precision=3, pad=True,
+            )
+            dec = coordinate.dec.to_string(
+                unit="deg", sep=":", precision=3, pad=True, alwayssign=True,
+            )
+            if format != "table":
+                for filter_name in filter_names:
+                    values = dict.fromkeys(available_columns, "")
+                    values.update(
+                        source_name=info.source_name, ra=ra, dec=dec,
+                        field_name=info.observation_field.field_name,
+                        filter=filter_name,
+                    )
+                    if magnitudes is not None:
+                        row = magnitudes.qtable[
+                            magnitudes.filter_names.index(filter_name)
+                        ]
+                        values["magnitude_system"] = magnitudes.magnitude_system
+                        for name, precision in (
+                            ("magnitude", 4), ("error", 4), ("significance", 2),
+                        ):
+                            value = (
+                                float(row[name].value) if name != "significance"
+                                else float(row[name])
+                            )
+                            values[name] = (
+                                "" if math.isnan(value)
+                                else f"{value:.{precision}f}"
+                            )
+                    writer.writerow([values[name] for name in selected_columns])
+                continue
             heading = (
                 f"{info.source_name}\n"
+                f"RA / Dec (ICRS): {ra} {dec}\n"
                 f"Field: {info.observation_field.field_name}"
             )
             table = (
-                magnitudes.to_table() if magnitudes is not None
+                magnitudes.to_table(filters=filter_names) if magnitudes is not None
                 else f"No {kind} magnitudes available."
             )
             summaries.append(f"{heading}\n{table}")
 
-        print("\n\n".join(summaries) if summaries else "No sources to display.")
+        if format != "table":
+            print(spreadsheet.getvalue(), end="")
+        else:
+            print("\n\n".join(summaries) if summaries else "No sources to display.")
 
     def calculate_zero_points(
         self, sigma: float = 3.0, *, min_significance: float = 3.0
