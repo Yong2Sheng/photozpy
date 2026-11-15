@@ -24,6 +24,7 @@ from ..sources import FilterMagnitude, Sources
 from ..sources.filter_magnitude import UPPER_LIMIT_ERROR
 from .regions import PhotometryRegions, PhotometryRegionCollection
 from .local_background import LocalBackgroundOptions, _LocalBackground
+from .background_diagnostics import BackgroundDiagnostic
 
 if TYPE_CHECKING:
     from .photometry import Photometry
@@ -131,6 +132,7 @@ def run_aperture_photometry(
         path for child in children(measurer._image_collection) for path in paths(child)
     }
     measurements: list[dict] = []
+    diagnostics = {}
     seen: set[tuple[str, str, str]] = set()
     attempted: dict[tuple[str, str], list[dict]] = {}
     # Reuse data/header/mask for the same frame even when role-specific region
@@ -247,6 +249,10 @@ def run_aperture_photometry(
                         "annulus_valid_fraction",
                     )
                 },
+                "background_geometric_area": np.nan,
+                "background_on_image_area": np.nan,
+                "background_valid_area": np.nan,
+                "background_source_masked_area": np.nan,
                 "background_area_fraction": np.nan,
                 "background_stability_sigma": np.nan,
                 "background_stability": "not_checked",
@@ -303,6 +309,21 @@ def run_aperture_photometry(
                 bkg_stats, primary = local_background.statistics(
                     annulus, bkg_clip_sigma, background_options.mask_growth_fwhm,
                 )
+                diagnostic = BackgroundDiagnostic.capture(
+                    local_background, aperture, annulus, bkg_stats,
+                    background_options.mask_growth_fwhm,
+                    {'source_id': info.source_name, 'field': identity[0],
+                     'filter': filter_name, 'image_path': row['image_path'],
+                     'clip_sigma': bkg_clip_sigma},
+                )
+                if diagnostic is not None:
+                    diagnostics[key] = diagnostic
+                    row.update(
+                        background_geometric_area=diagnostic.areas['geometric'],
+                        background_on_image_area=diagnostic.areas['on_image'],
+                        background_valid_area=diagnostic.areas['after_validity'],
+                        background_source_masked_area=diagnostic.areas['after_source_mask'],
+                    )
                 row["background_area_fraction"] = primary['area_fraction']
                 row["n_ann"] = primary['n_ann']
                 row["mean_bkg"] = primary['mean']
@@ -439,6 +460,9 @@ def run_aperture_photometry(
         table[name].unit = u.mag
     for name in ("n_ap", "n_ann"):
         table[name].unit = u.pix
+    for name in ('background_geometric_area', 'background_on_image_area',
+                 'background_valid_area', 'background_source_masked_area'):
+        table[name].unit = u.pix**2
     table["mean_bkg"].unit = u.adu / u.pix
     table.meta.update(
         magnitude_system="instrumental",
@@ -455,4 +479,5 @@ def run_aperture_photometry(
             source_name=identity[1],
             field_name=identity[0],
         )
+    measurer._background_diagnostics = diagnostics
     return table

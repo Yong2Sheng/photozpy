@@ -97,8 +97,17 @@ focus, tracking, registration interpolation, and stacking.
 The center, positive amplitude, gamma, beta, and residual background are fitted
 with bounded soft-L1 least squares. Beta is free within (1.1, 15), initialized at
 3; it is not fixed to a theoretical atmospheric value. Gamma ranges from 0.4
-pixels to the stamp half-width. A fit that reaches a numerical bound is rejected.
-There is no automatic Gaussian fallback.
+pixels to the stamp half-width. Fits reaching other bounds or the beta lower
+bound are rejected. When only beta reaches the upper limit, independently refit
+at fixed beta=15, 30, and 100, parameterizing width directly by FWHM. All three
+fits must converge without active bounds, and their FWHM range divided by their
+median must be no more than 5%. The beta=100 fit supplies the width; its beta is
+a fixed shape choice, not a measured wing parameter. The same residual, centroid,
+validity and elongation checks still apply. This allows nearly Gaussian profiles
+without automatically rejecting a stable width. There is no Gaussian fallback.
+The candidate table records `fit_method` and `width_stability` (a fractional
+range, not an uncertainty). Failed checks use `high_beta_fit_failed` or
+`high_beta_width_unstable`.
 
 Additional checks reject failed convergence, non-finite parameters, full widths
 below 1 pixel or beyond the stamp half-width, center displacement above 2 pixels,

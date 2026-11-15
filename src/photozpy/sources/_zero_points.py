@@ -39,6 +39,8 @@ class _ZeroPointStatistics:
     summary: pd.DataFrame
     details: pd.DataFrame
     signature: tuple[object, ...]
+    clipping_bounds: dict[str, tuple[float, float]]
+    clip_sigma: float
 
 
 def standard_signature(sources: Sources) -> tuple[object, ...]:
@@ -168,9 +170,14 @@ def calculate_zero_points(
     magnitude_system = next(iter(systems))
     details = pd.DataFrame(rows)
     summaries: list[dict[str, object]] = []
+    clipping_bounds: dict[str, tuple[float, float]] = {}
     for filter_name in telescope.filters():
         candidates = details.index[(details["filter"] == filter_name) & details["used"]]
         zero = details.loc[candidates, "zero_point"].to_numpy(dtype=float)
+        # Store the initial-sample limits, not retained-mean/scatter limits.
+        center = float(np.mean(zero)) if len(zero) else np.nan
+        scale = float(np.std(zero)) if len(zero) else np.nan
+        clipping_bounds[filter_name] = (center - sigma * scale, center + sigma * scale)
         # Preserve remove_outlier's single-pass scipy.stats.zscore recipe.
         keep = np.ones(len(zero), dtype=bool)
         if len(zero) > 1 and not np.all(zero == zero[0]):
@@ -200,7 +207,8 @@ def calculate_zero_points(
             len(standards),
         )
     return _ZeroPointStatistics(
-        telescope, magnitude_system, summary, details, standard_signature(sources)
+        telescope, magnitude_system, summary, details, standard_signature(sources),
+        clipping_bounds, float(sigma),
     )
 
 
@@ -242,17 +250,24 @@ def plot_zero_point_statistics(
             label="retained offsets",
             color="skyblue",
         )
-        if len(excluded):
-            ax.scatter(
-                np.zeros(len(excluded)),
-                excluded["zero_point"],
-                label="rejected offsets",
-                color="darkorange",
-                marker="x",
-                s=55,
-                linewidths=1.5,
-                zorder=4,
+        clipped = excluded[excluded["reason"] == "sigma_clipped"]
+        other = excluded[excluded["reason"] != "sigma_clipped"]
+        for subset, label, color in (
+            (clipped, "sigma-clipped offsets", "gray"),
+            (other, "other excluded offsets", "darkorange"),
+        ):
+            if len(subset):
+                ax.scatter(
+                    np.zeros(len(subset)), subset["zero_point"], label=label,
+                    color=color, marker="x", s=55, linewidths=1.5, zorder=4,
+                )
+        lower, upper = result.clipping_bounds[filter_name]
+        if np.all(np.isfinite([lower, upper])):
+            ax.axhline(
+                lower, color="purple", linestyle="--", linewidth=1.3,
+                label=f"actual clipping limits (initial mean ± {result.clip_sigma:g}σ)",
             )
+            ax.axhline(upper, color="purple", linestyle="--", linewidth=1.3)
         row = result.summary[result.summary["filter"] == filter_name].iloc[0]
         if np.isfinite(row["zero_point"]):
             mean = row["zero_point"]
@@ -260,9 +275,10 @@ def plot_zero_point_statistics(
             ax.axhline(
                 mean - reference_offset,
                 color="red",
-                label=f"average +/- {reference_offset:g} mag (guide)",
+                label=f"average ± {reference_offset:g} mag (guide only)",
+                linestyle=":", linewidth=1,
             )
-            ax.axhline(mean + reference_offset, color="red")
+            ax.axhline(mean + reference_offset, color="red", linestyle=":", linewidth=1)
         counts = f"{len(retained)} retained, {len(excluded)} rejected"
         if n_unavailable:
             counts += f", {n_unavailable} unavailable"
@@ -270,7 +286,14 @@ def plot_zero_point_statistics(
         ax.set_ylabel("Zero point [mag]")
         ax.set_xticks([0], [filter_name])
         ax.set_xlim(-0.1, 1)
-        ax.legend()
+        unavailable = stars[~np.isfinite(stars["zero_point"])]
+        reasons = unavailable["reason"].value_counts()
+        note = f"σ-clipped: {len(clipped)}; other excluded: {len(other)}"
+        if len(reasons):
+            note += "\nUnavailable: " + ", ".join(f"{key}={value}" for key, value in reasons.items())
+        ax.text(0.98, 0.02, note, transform=ax.transAxes, ha="right", va="bottom",
+                fontsize=8, color="dimgray", bbox=dict(facecolor="white", alpha=0.85, edgecolor="none"))
+        ax.legend(fontsize=8)
     for ax in list(axes.flat)[len(filters):]:
         ax.set_visible(False)
     fig.tight_layout()

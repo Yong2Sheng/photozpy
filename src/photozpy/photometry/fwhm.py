@@ -52,6 +52,8 @@ class _Star:
     axis_ratio: float = np.nan
     accepted: bool = False
     reason: str = ''
+    fit_method: str = 'free_moffat'
+    width_stability: float = np.nan
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,7 @@ class FWHM:
     FWHM = 2 * gamma * sqrt(2**(1/beta) - 1) is a full width in pixels,
     not a radius or an angular seeing estimate. A circular model supplies one
     unambiguous width; markedly elongated stars are rejected, not circularized.
+    Beta-only upper-bound fits undergo fixed-beta Moffat width-stability checks.
     No Gaussian fallback is used. Fits and background estimation may use the
     validity MASK; CMASK is not applied to the cleaned image. No pixel array,
     WCS, uncertainty, aperture, or calibration value is modified.
@@ -213,16 +216,54 @@ class FWHM:
         )
         if not fit.success or not np.all(np.isfinite(fit.x)):
             return replace(star, reason='fit_failed')
-        amplitude, cx, cy, gamma, beta, offset = map(float, fit.x)
+        parameters = fit.x
+        active = fit.active_mask
+        high_beta = parameters[4] >= 14.99
+        # A beta-only upper limit can leave the width identifiable. Check
+        # independent fixed-beta Moffat fits, parameterized directly by FWHM
+        # so gamma's scale bound does not constrain high-beta widths.
+        if high_beta and not np.any(np.delete(active, 4)):
+            seed_width = 2 * parameters[3] * np.sqrt(np.expm1(np.log(2) / parameters[4]))
+            trials = []
+            for fixed_beta in (15., 30., 100.):
+                def fixed_model(p):
+                    amp, fx, fy, width, baseline = p
+                    factor = 4 * np.expm1(np.log(2) / fixed_beta) / width**2
+                    return baseline + amp * (1 + factor * ((xx - fx)**2 + (yy - fy)**2))**(-fixed_beta)
+
+                trial = least_squares(
+                    lambda p: (fixed_model(p)[valid] - stamp[valid]) / noise,
+                    [parameters[0], parameters[1], parameters[2], seed_width, parameters[5]],
+                    bounds=([0., x - 2.5, y - 2.5, 1., -5 * noise],
+                            [np.inf, x + 2.5, y + 2.5, float(half_box), 5 * noise]),
+                    loss='soft_l1', x_scale='jac', max_nfev=500,
+                )
+                if not trial.success or not np.all(np.isfinite(trial.x)) or np.any(trial.active_mask):
+                    return replace(star, reason='high_beta_fit_failed', fit_method='fixed_beta_check')
+                trials.append(trial.x)
+            widths = np.array([trial[3] for trial in trials])
+            stability = float(np.ptp(widths) / np.median(widths))
+            star = replace(star, fit_method='fixed_beta_stable', width_stability=stability)
+            if stability > 0.05:
+                return replace(star, reason='high_beta_width_unstable')
+            # beta=100 is a fixed shape choice, not a measured wing parameter.
+            amp, fx, fy, width, baseline = trials[-1]
+            scale = width / (2 * np.sqrt(np.expm1(np.log(2) / 100.)))
+            parameters = np.array([amp, fx, fy, scale, 100., baseline])
+            active = np.zeros(6, dtype=int)
+        elif np.any(active) or parameters[4] <= 1.101 or high_beta:
+            amplitude, cx, cy, gamma, beta, offset = map(float, parameters)
+            width = 2 * gamma * np.sqrt(np.expm1(np.log(2) / beta))
+            return replace(star, x=cx, y=cy, fwhm=float(width), gamma=gamma,
+                           beta=beta, peak=amplitude, background=float(background + offset),
+                           reason='parameter_bound')
+
+        amplitude, cx, cy, gamma, beta, offset = map(float, parameters)
         fwhm = 2 * gamma * np.sqrt(np.expm1(np.log(2) / beta))
         star = replace(
             star, x=cx, y=cy, fwhm=float(fwhm), gamma=gamma, beta=beta,
             peak=amplitude, background=float(background + offset),
         )
-        # Reject bound-limited/truncated fits instead of accepting a numerical
-        # answer just because the optimizer reported convergence.
-        if np.any(fit.active_mask) or beta <= 1.101 or beta >= 14.99:
-            return replace(star, reason='parameter_bound')
         if not 1. <= fwhm < half_box:
             return replace(star, reason='width_outside_stamp')
         if np.hypot(cx - x, cy - y) > 2.:
@@ -230,7 +271,7 @@ class FWHM:
 
         rr = np.hypot(xx - cx, yy - cy)
         core = (rr <= min(1.5 * fwhm, half_box)) & valid
-        rms = float(np.sqrt(np.mean((model(fit.x)[core] - stamp[core])**2)))
+        rms = float(np.sqrt(np.mean((model(parameters)[core] - stamp[core])**2)))
         star = replace(star, residual_rms=rms)
         if rms > max(3 * noise, 0.05 * amplitude):
             return replace(star, reason='poor_residual')
@@ -401,7 +442,14 @@ class FWHM:
         Notes
         -----
         Numerical bounds beta=(1.1,15), gamma=(0.4,stamp half-width) prevent
-        unconstrained wing/width solutions; bound-limited fits are rejected.
+        unconstrained wing/width solutions. Fits limited by parameters other
+        than beta are rejected. For beta alone at its upper limit, refit at
+        fixed beta=15,30,100 with FWHM parameterization. All fits must converge
+        without active bounds; their width range/median must be <=5%. Use the
+        beta=100 width and retain every centroid/residual/shape check. Report
+        fit_method and width_stability per candidate; beta=100 is a fixed shape,
+        not an inferred wing parameter. No high-beta refit is used at beta's
+        lower bound.
         Positive amplitude, bounded center and residual-background fitting use
         soft-L1 least squares scaled by the local sky RMS. A residual check
         rejects RMS above max(3*sky RMS, 5% of fitted peak) inside 1.5 FWHM.

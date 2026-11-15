@@ -478,3 +478,15 @@ def test_set_cmap_parameters_rejects_out_of_range_values(
         ds9_adapter.set_cmap_parameters(contrast=contrast, bias=bias)
 
     set_command.assert_not_called()
+
+
+def test_reset_display_changes_only_scale_and_contrast(ds9_adapter, monkeypatch):
+    send = Mock()
+    monkeypatch.setattr(ds9_adapter, 'set', send)
+    ds9_adapter.reset_display()
+    assert send.call_args_list == [
+        call('cmap', '1.0', '0.5'),
+        call('scale', 'scope', 'global'),
+        call('scale', 'asinh'),
+        call('scale', 'mode', 'zscale'),
+    ]

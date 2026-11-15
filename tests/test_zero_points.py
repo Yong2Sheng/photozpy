@@ -335,7 +335,8 @@ def test_plot_handles_one_two_and_three_filters_without_writing(
     assert len(axes) == len(filter_names)
     for ax in axes:
         np.testing.assert_allclose(
-            [line.get_ydata()[0] for line in ax.lines], [24.9, 25.1]
+            [line.get_ydata()[0] for line in ax.lines if line.get_color() == 'red'],
+            [24.9, 25.1]
         )
     assert not list(tmp_path.iterdir())
     pd.testing.assert_frame_equal(before, standards.zero_points)
@@ -367,14 +368,40 @@ def test_plot_includes_rejected_extremes_and_distinguishes_missing_offsets(monke
     try:
         for ax in (ax for ax in fig.axes if ax.get_visible()):
             assert "11 retained, 2 rejected, 1 unavailable" in ax.get_title()
-            rejected = next(
-                collection for collection in ax.collections
-                if collection.get_label() == "rejected offsets"
+            clipped = next(c for c in ax.collections if c.get_label() == "sigma-clipped offsets")
+            other = next(c for c in ax.collections if c.get_label() == "other excluded offsets")
+            np.testing.assert_array_equal(clipped.get_offsets()[:, 1], [40])
+            np.testing.assert_array_equal(other.get_offsets()[:, 1], [30])
+            np.testing.assert_allclose(clipped.get_edgecolors()[0, :3], [0.5019608] * 3)
+            initial = np.array(offsets[:12])
+            np.testing.assert_allclose(
+                [line.get_ydata()[0] for line in ax.lines if line.get_color() == "purple"],
+                [initial.mean() - 3 * initial.std(), initial.mean() + 3 * initial.std()],
             )
-            np.testing.assert_array_equal(rejected.get_offsets()[:, 1], [40, 30])
             lower, upper = ax.get_ylim()
             assert lower < 25 < 40 < upper
         pd.testing.assert_frame_equal(summary, standards.zero_points)
         pd.testing.assert_frame_equal(details, standards.zero_point_details)
+    finally:
+        plt.close(fig)
+
+
+def test_retained_offset_outside_visual_guide_is_inside_actual_clipping_limits(monkeypatch):
+    import matplotlib.pyplot as plt
+    monkeypatch.setattr(plt, "show", lambda: None)
+    offsets = np.array([26.56, 26.568, 26.575, 26.61, 26.616, 26.62,
+                        26.628, 26.648, 26.653, 26.66, 26.682, 26.744])
+    standards, _ = make_sources(offsets)
+    before = standards.calculate_zero_points(sigma=3)
+    assert np.max(offsets) > np.mean(offsets) + 0.1
+    assert not before["n_clipped"].any()
+    fig = standards.plot_zero_point_statistics()
+    try:
+        for ax in (a for a in fig.axes if a.get_visible()):
+            limits = [line.get_ydata()[0] for line in ax.lines if line.get_color() == "purple"]
+            np.testing.assert_allclose(limits, [offsets.mean() - 3 * offsets.std(), offsets.mean() + 3 * offsets.std()])
+            assert limits[0] < offsets.min() < offsets.max() < limits[1]
+            assert not any(c.get_label() == "sigma-clipped offsets" for c in ax.collections)
+        pd.testing.assert_frame_equal(before, standards.zero_points)
     finally:
         plt.close(fig)

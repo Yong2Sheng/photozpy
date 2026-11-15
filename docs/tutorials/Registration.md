@@ -34,6 +34,23 @@ analysis_images: ImageCollectionGroup = registration.register_images(
 )
 ```
 
+For automatic reference selection, replace the dictionary above with:
+
+```python
+reference_images = "auto"
+```
+
+This selects the first selected Light image of each FIELD in collection order,
+separately within each child directory. Bias/dark/flat and Master frames are
+excluded. The first frame may be in any observed filter; all filters in that
+field use its grid. In auto mode reference_filter is ignored. This is a
+convenience selection, not a quality ranking. The selected filenames appear in
+the registration log and `registration.reference_paths` after success.
+Repeating the call with the same selection/order reuses compatible registered
+images. If the first image changes, the existing reference-identity checks still
+reject incompatible registration before any writes; restore pre-registration
+working copies to select a different grid.
+
 The dictionary keys must match FIELD headers exactly. Each value selects one
 specific Light FITS from the current working collection; it does not select a
 whole field or a whole filter. Before-cosmic backups and raw images are not valid
@@ -160,3 +177,27 @@ working copies and separate the detections first; mixed masks in already
 resampled files cannot reliably be split by renaming an extension. Do not
 resample an already registered image again. Existing observing files are never
 automatically migrated.
+
+## Telescope-provided WCS before registration
+
+Some cameras attach an approximate celestial WCS to raw exposures. For a
+workflow which solves WCS again after Master stacking, explicitly use:
+
+```python
+analysis_images = registration.register_images(
+    reference_images="auto",
+    detection_sigmas=[5, 6, 7, 8, 9, 10, 11, 12],
+    min_area=8,
+    discard_input_wcs=True,
+)
+```
+
+Registration still matches image stars, independently of the input WCS. This
+option removes old spatial WCS, alternate solutions and SIP coefficients from
+newly resampled output headers and records the removal in HISTORY. It does not
+modify the unresampled reference's WCS or WCS on already registered targets
+which are reused. It does not solve WCS or propagate the old solution through
+the transform. Solve WCS on the resulting Masters before sky-coordinate use.
+By default this option is False, preserving the existing pre-write rejection of
+WCS-bearing targets. When saving to a separate directory, input files remain
+unchanged; in-place registration replaces the analysis working copies.
