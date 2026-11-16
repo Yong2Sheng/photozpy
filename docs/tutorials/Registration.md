@@ -125,6 +125,81 @@ The successful threshold is recorded as `REGSIG` in newly registered FITS header
 Existing matching registrations are reused even if the candidate list changes;
 this option does not select an optimal fit among successful thresholds.
 
+### Optional whole-field smoothing fallback
+
+For split or poorly focused star profiles, enable a second detection recipe:
+
+```python
+analysis_images = registration.register_images(
+    reference_filter="SDSS_g",
+    detection_sigmas=list(range(3, 16)),
+    min_area=8,
+    fallback_smoothing_sigma=2.0,
+    discard_input_wcs=True,
+)
+```
+
+The default `fallback_smoothing_sigma=None` preserves the existing behavior.
+A positive value is the Gaussian standard deviation in **pixels**, independent
+of the detection thresholds. For each field, ordinary matching first tries all
+supplied thresholds for each target. If one target exhausts them, all staged
+results for that field are discarded and **every target** is matched again
+using smoothed detection copies and the same threshold list. Earlier ordinary
+successes are not reused in the smoothed pass. The reference grid stays fixed.
+
+Only temporary images used to find stars are smoothed. Their MASK and CMASK
+pixels are excluded using normalized convolution to avoid spreading masked
+artifacts. The transform is applied to the **original unsmoothed science data**
+once; the existing validity-mask/CMASK propagation remains unchanged.
+
+A complete field is staged on disk before any of its inputs or final outputs
+are replaced. If the smoothed pass also fails, that field remains untouched.
+Other fields already completed remain completed. Publication is atomic per
+file; an I/O error while publishing can still leave a partial field, which must
+be restored from pre-registration copies. Temporary storage must accommodate
+one or two field outputs during the attempt; it is cleaned on return/error.
+
+Each output, including the unresampled reference, records `REGSMTH`: `0.0` for
+ordinary detection or the Gaussian sigma for smoothed detection. `REGSIG`
+continues to record the successful detection threshold on each target.
+Repeated calls reuse a **complete, compatible field**, including a field with
+only its reference image, without resampling or rewriting it in place. A
+reference-only selection preserves its existing mode even if it was previously
+part of a larger smoothed field.
+
+Once **any** selected member carries `REGSMTH`, all selected members must be a
+complete, consistently marked field. This check also runs when the caller omits
+`fallback_smoothing_sigma`; omitting it cannot silently turn a recorded smoothed
+field into a mixture. Native exposures added to a recorded field, partial
+publication, missing/invalid modes, mixed modes, or changing an existing positive
+smoothing width require restoring pre-registration copies. Incremental addition
+to an already recorded field is not implemented. `REGSMTH=0` remains compatible
+with any positive fallback setting because no smoothing was actually used.
+
+Pure legacy selections without `REGSMTH` retain default reference-based reuse;
+opting those already resampled targets into the new fallback requires native
+copies. Independently of this option, an absent/empty `ALIGN` with residual
+`REGSIG`, `REGSMTH`, `REGREF`, or `REFHASH` is rejected before writing. Never clear
+registration markers to bypass this check. If **all** provenance markers are
+removed, headers alone cannot establish whether the target pixels were already
+resampled. Likewise, manually replacing target pixels while preserving old
+markers is outside the supported reuse contract; target pixels have no separate
+integrity digest. A before-cosmic-ray backup needs cosmic cleaning again before
+registration.
+
+After success, the processor's image_collection and the returned collection
+select the output files, so repeating that processor can reuse those completed
+outputs. Constructing a new processor from the original native collection with
+the same `save_location` instead requires overwrite=True for existing outputs
+and recomputes from native pixels; it does not implicitly load destination
+images. Select the completed output collection when you intend to reuse it. Matching failures report the field, actual phase,
+threshold sequence and smoothing width. Publication errors report the failed
+path, number of outputs already published and recovery instructions.
+
+A successful fit is not a quality guarantee. Inspect registered stars and the
+master images; this option is a failure fallback, not an automatic quality
+ranking or a correction for the original focus/PSF.
+
 Each FIELD has a fixed progress-bar title. The postfix gives the direction:
 `Aligning image.fits to reference.fits`. Only basenames are shown. The reference
 is retained, so it is excluded from the bar's image count. Existing compatible
@@ -140,7 +215,7 @@ and [SEP extraction](https://sep.readthedocs.io/en/stable/api/sep.extract.html).
 
 The reference's pixels stay unchanged. Other Light frames are resampled using
 astroalign's original find_transform/apply_transform operations when CMASK is
-present (otherwise register). CMASK excludes detections only during star finding;
+present or detection smoothing is active (otherwise register). CMASK excludes detections only during star finding;
 the cleaned science values are resampled normally. The binary CMASK is resampled
 separately with nearest-neighbor interpolation for inspection, never merged
 into output MASK. The output MASK contains propagated validity flags, uncovered
@@ -169,7 +244,10 @@ is never marked as successfully registered.
 
 Only combine Light frames after registration. Multi-image FIELD/FILTER stacks
 must share REGREF/REFHASH; Combine rejects unregistered or mixed-reference
-stacks and retains their output mask. Downstream photometry must honor MASK.
+stacks and retains their output mask. Combine does not independently validate
+REGSMTH recipe consistency; the registration checks above enforce that contract.
+Do not rely on Combine to detect manually assembled mixed-recipe inputs.
+Downstream photometry must honor MASK.
 
 Legacy cleaned files storing cosmic detections in MASK without CMASK are rejected
 before registration or multi-image Light combination. Restore pre-registration

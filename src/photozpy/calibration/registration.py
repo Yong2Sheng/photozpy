@@ -11,17 +11,19 @@ The refactoring updates collection/field APIs, reference tracking, and masks.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import logging
 import re
 from pathlib import Path
 from typing import Literal
+from tempfile import TemporaryDirectory
 
 from astroalign import MaxIterError, apply_transform, find_transform, register
 from astropy.io import fits
 from astropy.nddata import CCDData
 import numpy as np
+from scipy.ndimage import gaussian_filter
 from skimage.transform import warp
 from tqdm.auto import tqdm
 
@@ -85,11 +87,18 @@ class Registration:
     ALIGN retains the original Reference/Registered values. REGREF and REFHASH
     identify the reference filename and a digest of its pixel grid and mask.
     Already registered targets are reused only when these identifiers agree;
-    changing references requires pre-registration working copies.
+    changing references requires pre-registration working copies. Any REGSMTH
+    records additionally require a complete, consistent selected field on every
+    call, including the default path. Orphan markers without ALIGN are rejected.
+    Headers do not authenticate target arrays if pixels/markers are manually
+    replaced or all provenance is stripped.
 
     Methods return updated collections and retain calibration/master members.
-    Each output file is written atomically; the batch is not a transaction if a
-    later transform fails. No writes or registrations occur in the constructor.
+    Each output file is written atomically. By default a later transform failure
+    may leave earlier targets completed. The optional smoothing fallback stages
+    a whole field before publication and retries from native inputs. Publication
+    I/O errors are still not a multi-file transaction. No writes or registrations
+    occur in the constructor.
     """
 
     def __init__(
@@ -125,6 +134,7 @@ class Registration:
         detection_sigma: float = 5,
         *,
         detection_sigmas: Sequence[float] | None = None,
+        fallback_smoothing_sigma: float | None = None,
         reference_images: Mapping[str, str | Path] | Literal['auto'] | None = None,
         save_location: str | Path | None = None,
         overwrite: bool | None = None,
@@ -163,6 +173,22 @@ class Registration:
             Exhausting the list raises RuntimeError without writing the target.
             None retains the single detection_sigma behavior. Successful targets
             record the actual threshold in the FITS header REGSIG.
+        fallback_smoothing_sigma : float or None, optional
+            Opt in with e.g. 2.0 (Gaussian sigma in pixels). First exhaust the
+            detection_sigmas on original detection images. If any target still
+            fails matching, discard staged results and restart ALL targets in
+            that FIELD using smoothed detection copies and the same thresholds.
+            Science pixels are never smoothed; the fitted transform resamples
+            the original science image once. MASK/CMASK remain separate.
+            Results are published only after every target in the field succeeds.
+            REGSMTH records 0 for ordinary detection or the smoothing sigma on
+            every output, including the unchanged reference. Repeated complete
+            fields (including reference-only selections) with compatible
+            REGSMTH are reused. Recorded mode consistency is checked even when
+            this option is omitted. Old/mixed registrations require restoring
+            pre-registration copies. Orphan registration markers without ALIGN
+            are rejected on all paths. Default None keeps ordinary matching for
+            new inputs and reference-based reuse for pure legacy selections.
         reference_images : mapping of str to path, "auto", or None, optional
             Use 'auto' to select the first selected Light image of each FIELD
             in collection order, separately within each child directory. All
@@ -238,6 +264,7 @@ class Registration:
             min_area=min_area,
             detection_sigma=detection_sigma,
             detection_sigmas=detection_sigmas,
+            fallback_smoothing_sigma=fallback_smoothing_sigma,
             reference_images=reference_images,
             save_location=save_location,
             overwrite=overwrite,
@@ -251,6 +278,7 @@ class Registration:
         detection_sigma: float = 5,
         *,
         detection_sigmas: Sequence[float] | None = None,
+        fallback_smoothing_sigma: float | None = None,
         reference_images: Mapping[str, str | Path] | Literal['auto'] | None = None,
         save_location: str | Path | None = None,
         overwrite: bool | None = None,
@@ -279,24 +307,43 @@ class Registration:
                 name = 'detection_sigma' if detection_sigmas is None else 'detection_sigmas'
                 raise ValueError(f'{name} must contain only positive finite numbers.')
 
+        if fallback_smoothing_sigma is not None and (
+            isinstance(fallback_smoothing_sigma, (bool, np.bool_))
+            or not isinstance(fallback_smoothing_sigma, (int, float, np.integer, np.floating))
+            or not np.isfinite(fallback_smoothing_sigma) or fallback_smoothing_sigma <= 0
+        ):
+            raise ValueError('fallback_smoothing_sigma must be a positive finite number or None.')
+
         if not isinstance(discard_input_wcs, bool):
             raise TypeError('discard_input_wcs must be a bool.')
         replace: bool = self._overwrite if overwrite is None else overwrite
         plans: list[_RegistrationPlan] = self._plan_groups(
             filter, reference_images, save_location, replace, discard_input_wcs,
         )
+        # Recorded field recipes remain authoritative on every entry path,
+        # including calls that omit the fallback option. Validate all fields
+        # before any publication; a default call cannot bypass this guard.
+        reuse_modes = [self._fallback_reuse_mode(plan, fallback_smoothing_sigma)
+                       for plan in plans]
         replacements: dict[Path, Path] = {}
 
-        for plan in plans:
+        for plan, reuse_mode in zip(plans, reuse_modes):
             logger.info(
                 'Registration | FIELD=%s\n%s\nReference: %s (%d Light images)',
                 plan.field_name, '-' * 64,
                 plan.reference_image_path.name, len(plan.image_paths),
             )
-            self._Register_images(
-                plan, min_area=min_area, detection_sigma=detection_sigma,
-                detection_sigmas=candidates, overwrite=replace,
-            )
+            if fallback_smoothing_sigma is None:
+                self._Register_images(
+                    plan, min_area=min_area, detection_sigma=detection_sigma,
+                    detection_sigmas=candidates, overwrite=replace,
+                    **({'smoothing_sigma': reuse_mode} if reuse_mode is not None else {}),
+                )
+            else:
+                self._register_with_fallback(
+                    plan, min_area=min_area, candidates=candidates,
+                    smoothing_sigma=float(fallback_smoothing_sigma), overwrite=replace,
+                )
             replacements.update(plan.destinations)
 
         self._image_collection = rebuild(self._image_collection, replacements=replacements)
@@ -304,6 +351,117 @@ class Registration:
             plan.destinations[plan.reference_image_path] for plan in plans
         )
         return self._image_collection
+
+    @staticmethod
+    def _matching_failure(exc: Exception) -> bool:
+        return isinstance(exc, MaxIterError) or (
+            isinstance(exc, ValueError)
+            and str(exc).startswith('Reference stars in ')
+            and 'minimum value' in str(exc)
+        )
+
+    @staticmethod
+    def _fallback_reuse_mode(
+        plan: _RegistrationPlan, smoothing_sigma: float | None,
+    ) -> float | None:
+        """Recognize a complete recorded field, including a reference-only one.
+
+        Pure legacy inputs retain default behavior. Once any member carries
+        REGSMTH, every selected member must form a complete, consistent field,
+        even if the current call does not request fallback. Native additions or
+        partial publication require restoration instead of silently mixing modes.
+        """
+        headers = [fits.getheader(path) for path in plan.image_paths]
+        targets = [h for path, h in zip(plan.image_paths, headers)
+                   if path != plan.reference_image_path]
+        has_recorded_mode = any('REGSMTH' in h for h in headers)
+        if not has_recorded_mode:
+            if smoothing_sigma is None or not any(h.get('ALIGN') == 'Registered' for h in targets):
+                return None
+        else:
+            complete = all(
+                h.get('ALIGN') == ('Reference' if path == plan.reference_image_path else 'Registered')
+                for path, h in zip(plan.image_paths, headers)
+            )
+            values = [h.get('REGSMTH') for h in headers]
+            valid_modes = all(
+                not isinstance(mode, (bool, np.bool_))
+                and isinstance(mode, (int, float, np.integer, np.floating))
+                and np.isfinite(mode) and mode >= 0 for mode in values
+            )
+            if complete and valid_modes and len(set(values)) == 1:
+                mode = float(values[0])
+                if smoothing_sigma is None or mode in (0., smoothing_sigma):
+                    return mode
+        raise ValueError(
+            f'{plan.field_name}: registration requires unresampled inputs '
+            'or a complete field with one compatible REGSMTH mode; restore '
+            'pre-registration working copies and rerun cosmic-ray cleaning if needed. '
+            'Do not clear ALIGN markers on resampled files.'
+        )
+
+    @staticmethod
+    def _register_with_fallback(
+        plan: _RegistrationPlan, *, min_area: int, candidates: Sequence[float],
+        smoothing_sigma: float, overwrite: bool,
+    ) -> None:
+        mode = Registration._fallback_reuse_mode(plan, smoothing_sigma)
+        if mode is not None:
+            Registration._Register_images(
+                plan, min_area=min_area, detection_sigmas=candidates,
+                overwrite=overwrite, smoothing_sigma=mode,
+            )
+            return
+
+        # Stage a complete field on disk, keeping memory bounded and all input
+        # pixels native until a single detection recipe succeeds for the field.
+        # A failed match never publishes a partially registered field.
+        with TemporaryDirectory(prefix='photozpy-registration-') as temporary:
+            for mode in (0., smoothing_sigma):
+                directory = Path(temporary) / str(mode)
+                staged = replace(plan, destinations={
+                    path: directory / path.name for path in plan.image_paths
+                })
+                try:
+                    Registration._Register_images(
+                        staged, min_area=min_area, detection_sigmas=candidates,
+                        overwrite=False, smoothing_sigma=mode,
+                    )
+                except (RuntimeError, OSError) as exc:
+                    if mode == 0. and Registration._matching_failure(exc.__cause__):
+                        logger.info(
+                            'FIELD=%s: raw detection thresholds exhausted; restarting ALL '
+                            'targets from unresampled inputs with detection smoothing sigma=%s pix.',
+                            plan.field_name, smoothing_sigma,
+                        )
+                        continue
+                    phase = 'ordinary' if mode == 0. else 'smoothed'
+                    phases = 'ordinary' if mode == 0. else 'ordinary + smoothed'
+                    raise RuntimeError(
+                        f'FIELD={plan.field_name}: {phase} registration failed; '
+                        f'phases_attempted={phases}, detection_sigmas={list(candidates)}, '
+                        f'smoothing_sigma={mode} pix. No results published for this field. {exc}'
+                    ) from (exc.__cause__ if exc.__cause__ is not None else exc)
+                # Complete recipe chosen. Publish each file atomically using
+                # the original overwrite policy, including new output folders.
+                published = 0
+                for path in plan.image_paths:
+                    try:
+                        update_fits_header(
+                            staged.destinations[path], {},
+                            output_path=plan.destinations[path], overwrite=overwrite,
+                        )
+                    except OSError as exc:
+                        raise type(exc)(
+                            f'FIELD={plan.field_name}: publication failed at '
+                            f'{plan.destinations[path]} after {published}/{len(plan.image_paths)} '
+                            f'files; REGSMTH={mode}. Earlier outputs may already be replaced. '
+                            'Restore pre-registration copies before in-place retry, or rerun '
+                            'from unchanged native inputs into a separate output directory. '
+                            f'{exc}'
+                        ) from exc
+                    published += 1
+                return
 
     def _plan_groups(
         self,
@@ -369,6 +527,14 @@ class Registration:
                     align = header.get('ALIGN')
                     if align not in (None, '', 'Reference', 'Registered'):
                         raise ValueError(f'{path.name}: unsupported ALIGN state {align!r}.')
+                    if align in (None, '') and any(
+                        key in header for key in ('REGSMTH', 'REGSIG', 'REGREF', 'REFHASH')
+                    ):
+                        raise ValueError(
+                            f'{path.name}: registration markers remain without ALIGN; '
+                            'restore pre-registration working copies instead of resampling '
+                            'an array with unknown registration history.'
+                        )
 
                 # Auto follows collection order; explicit/filter choices retain
                 # their existing behavior and all reference-identity checks.
@@ -549,7 +715,7 @@ class Registration:
     def _align_with_cmask(
         source: CCDData, reference: CCDData,
         source_cmask: np.ndarray | None, reference_cmask: np.ndarray | None,
-        *, min_area: int, detection_sigma: float,
+        *, min_area: int, detection_sigma: float, smoothing_sigma: float = 0.,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
         """Use cosmic detections for star finding, never for output validity.
 
@@ -562,6 +728,17 @@ class Registration:
             detection = image.copy()
             if cmask is not None:
                 detection.mask = cmask if image.mask is None else image.mask | cmask
+            if smoothing_sigma > 0:
+                # Normalized convolution prevents invalid pixels/cosmic detections
+                # from bleeding into neighboring stellar detection pixels.
+                valid = (np.ones(image.shape, dtype=bool) if detection.mask is None
+                         else ~detection.mask)
+                weights = gaussian_filter(valid.astype(float), smoothing_sigma)
+                values = gaussian_filter(np.where(valid, image.data, 0.).astype(float), smoothing_sigma)
+                detection.data = np.divide(
+                    values, weights, out=np.full(image.shape, np.median(image.data)),
+                    where=weights > 0,
+                )
             detection_images.append(detection)
 
         transform, _ = find_transform(
@@ -596,6 +773,7 @@ class Registration:
         *,
         overwrite: bool,
         detection_sigmas: Sequence[float] | None = None,
+        smoothing_sigma: float | None = None,
     ) -> None:
         """Register one FIELD, keeping the original per-target astroalign call."""
         reference_image_path: Path = plan.reference_image_path
@@ -608,6 +786,8 @@ class Registration:
         reference_header = fits.getheader(reference_image_path)
         reference_destination = plan.destinations[reference_image_path]
         markers = {'REGREF': reference_image_path.name, 'REFHASH': plan.reference_hash}
+        if smoothing_sigma is not None:
+            markers['REGSMTH'] = (smoothing_sigma, 'Detection-only Gaussian sigma (pix); 0=none')
         if reference_destination != reference_image_path or not Registration._matches_reference(
             reference_header, reference_image_path, plan.reference_hash,
         ):
@@ -655,10 +835,12 @@ class Registration:
                     attempted.append(sigma)
                     try:
                         aligned_cmask = None
-                        if target_cmask is not None or reference_cmask is not None:
+                        if target_cmask is not None or reference_cmask is not None or smoothing_sigma:
+                            smoothing_options = ({'smoothing_sigma': smoothing_sigma}
+                                                 if smoothing_sigma else {})
                             img_aligned, footprint, aligned_cmask = Registration._align_with_cmask(
                                 target_data, reference_data, target_cmask, reference_cmask,
-                                min_area=min_area, detection_sigma=sigma,
+                                min_area=min_area, detection_sigma=sigma, **smoothing_options,
                             )
                         else:
                             img_aligned, footprint = register(
@@ -667,11 +849,7 @@ class Registration:
                                 propagate_mask=True,
                             )
                     except Exception as exc:
-                        matching_failure = isinstance(exc, MaxIterError) or (
-                            isinstance(exc, ValueError)
-                            and str(exc).startswith('Reference stars in ')
-                            and 'minimum value' in str(exc)
-                        )
+                        matching_failure = Registration._matching_failure(exc)
                         if matching_failure and len(attempted) < len(candidates):
                             logger.info(
                                 '%s: no match at detection_sigma=%s; trying detection_sigma=%s.',
@@ -695,6 +873,8 @@ class Registration:
                 if plan.discard_input_wcs:
                     header_target = Registration._without_spatial_wcs(header_target)
 
+                if smoothing_sigma is not None:
+                    header_target['REGSMTH'] = markers['REGSMTH']
                 header_target['REGSIG'] = (sigma, 'Detection sigma used for registration')
                 header_target['ALIGN'] = 'Registered'
                 header_target['REGREF'] = reference_image_path.name
