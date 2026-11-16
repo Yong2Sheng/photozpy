@@ -662,3 +662,489 @@ def test_discard_input_wcs_only_on_newly_resampled_outputs(tmp_path, fake_regist
     )
     assert not fake_register
     assert has_wcs(output / target.name)
+
+
+@pytest.mark.parametrize("entry_point", ["register_images", "Register_images"])
+def test_field_smoothing_fallback_restarts_earlier_success_from_native_pixels(tmp_path, monkeypatch, entry_point):
+    from skimage.transform import SimilarityTransform
+
+    data = np.zeros((8, 8))
+    data[3, 3] = 100.
+    reference = image(tmp_path, 'a.fits', value=data)
+    first = image(tmp_path, 'b.fits', value=data + 20)
+    last = image(tmp_path, 'c.fits', value=data + 40)
+    originals = {p: p.read_bytes() for p in (reference, first, last)}
+    calls = []
+
+    def ordinary(source, target, **kwargs):
+        calls.append(('ordinary', source.header['FILENAME'] if 'FILENAME' in source.header else
+                      float(source.data[0, 0]), kwargs['detection_sigma']))
+        # No reference/target has been published, even after b succeeded.
+        assert all(p.read_bytes() == before for p, before in originals.items())
+        if source.data[0, 0] == 40:
+            raise registration_module.MaxIterError('no triangles')
+        return source.data + 1000, np.zeros(source.shape, bool)
+
+    def smoothed(source, target, **kwargs):
+        calls.append(('smoothed', kwargs['detection_sigma']))
+        assert source.data[3, 3] < 100
+        assert all(p.read_bytes() == before for p, before in originals.items())
+        return SimilarityTransform(), (np.zeros((5, 2)), np.zeros((5, 2)))
+
+    def apply(transform, source, target, **kwargs):
+        # The actual resampling sees the original sharp source, not ordinary
+        # pass output (+1000) or the smoothed detection image.
+        assert source.data[0, 0] in (20., 40.)
+        assert source.data[3, 3] == source.data[0, 0] + 100
+        return source.data.copy(), np.zeros(source.shape, bool)
+
+    monkeypatch.setattr(registration_module, 'register', ordinary)
+    monkeypatch.setattr(registration_module, 'find_transform', smoothed)
+    monkeypatch.setattr(registration_module, 'apply_transform', apply)
+    processor = Registration(collection(tmp_path), overwrite=True)
+    getattr(processor, entry_point)("SDSS_g'", detection_sigmas=[3, 4], fallback_smoothing_sigma=2.)
+    assert calls == [('ordinary', 20., 3), ('ordinary', 40., 3), ('ordinary', 40., 4),
+                     ('smoothed', 3), ('smoothed', 3)]
+    for path in (reference, first, last):
+        assert fits.getheader(path)['REGSMTH'] == 2.
+    np.testing.assert_array_equal(fits.getdata(first), data + 20)
+    np.testing.assert_array_equal(fits.getdata(last), data + 40)
+    assert fits.getheader(first)['REGSIG'] == 3
+    # A repeat call uses the complete, consistent field without a new fit.
+    processor.register_images("SDSS_g'", fallback_smoothing_sigma=2., overwrite=False)
+    assert len(calls) == 5
+
+
+def test_failed_smoothing_leaves_entire_field_unchanged(tmp_path, monkeypatch):
+    a = image(tmp_path, 'a.fits')
+    b = image(tmp_path, 'b.fits', value=200.)
+    before = {p: p.read_bytes() for p in (a, b)}
+
+    def fail(*args, **kwargs):
+        raise registration_module.MaxIterError('no triangles')
+
+    monkeypatch.setattr(registration_module, 'register', fail)
+    monkeypatch.setattr(registration_module, 'find_transform', fail)
+    with pytest.raises(RuntimeError):
+        Registration(collection(tmp_path), overwrite=True).register_images(
+            "SDSS_g'", detection_sigmas=[3, 4], fallback_smoothing_sigma=2.)
+    assert all(p.read_bytes() == value for p, value in before.items())
+
+
+@pytest.mark.parametrize('setting', [0, -1, float('nan'), float('inf'), True, '2'])
+def test_invalid_smoothing_setting_rejected_without_writes(tmp_path, setting):
+    a = image(tmp_path, 'a.fits')
+    before = a.read_bytes()
+    with pytest.raises(ValueError, match='fallback_smoothing_sigma'):
+        Registration(collection(tmp_path), overwrite=True).register_images(
+            "SDSS_g'", fallback_smoothing_sigma=setting)
+    assert a.read_bytes() == before
+
+
+def test_fallback_ordinary_success_and_mixed_resume_guard(tmp_path, fake_register):
+    a = image(tmp_path, 'a.fits')
+    b = image(tmp_path, 'b.fits', value=200.)
+    processor = Registration(collection(tmp_path), overwrite=True)
+    processor.register_images("SDSS_g'", fallback_smoothing_sigma=2.)
+    assert all(fits.getheader(p)['REGSMTH'] == 0 for p in (a, b))
+    c = image(tmp_path, 'c.fits', value=300.)
+    before = {p: p.read_bytes() for p in (a, b, c)}
+    with pytest.raises(ValueError, match='unresampled inputs'):
+        Registration(collection(tmp_path), overwrite=True).register_images(
+            "SDSS_g'", fallback_smoothing_sigma=2.)
+    assert all(p.read_bytes() == value for p, value in before.items())
+
+
+def test_smoothing_ignores_masked_spike_and_keeps_science_and_cmask_separate(monkeypatch):
+    from skimage.transform import SimilarityTransform
+    data, _ = synthetic_star_field()
+    mask = np.zeros(data.shape, bool)
+    mask[60, 60] = True
+    data[60, 60] = 1e10
+    source = CCDData(data.copy(), unit='adu')
+    reference = CCDData(data.copy(), unit='adu')
+
+    def find(s, r, **kwargs):
+        assert s.mask[60, 60]
+        assert s.data[60, 60] < 1e5
+        assert s.data[60, 61] < 1e5
+        return SimilarityTransform(), (None, None)
+
+    def apply(t, s, r, **kwargs):
+        assert s.data[60, 60] == 1e10
+        assert s.mask is None
+        return s.data.copy(), np.zeros(s.shape, bool)
+
+    monkeypatch.setattr(registration_module, 'find_transform', find)
+    monkeypatch.setattr(registration_module, 'apply_transform', apply)
+    aligned, footprint, cmask = Registration._align_with_cmask(
+        source, reference, mask, mask, min_area=8, detection_sigma=3, smoothing_sigma=2.)
+    np.testing.assert_array_equal(aligned, data)
+    assert not footprint.any()
+    np.testing.assert_array_equal(cmask, mask)
+
+
+def test_real_smoothed_detection_resamples_original_flux_once(tmp_path, monkeypatch):
+    data, stars = synthetic_star_field()
+    reference = image(tmp_path, 'g_001.fits', value=data)
+    translated = shift(data, shift=(2.4, -3.1), order=3, mode='constant', cval=100.)
+    target = image(tmp_path, 'r_001.fits', band="SDSS_r'", value=translated)
+
+    def fail_raw(*args, **kwargs):
+        raise registration_module.MaxIterError('exercise smoothing fallback')
+
+    monkeypatch.setattr(registration_module, 'register', fail_raw)
+    Registration(collection(tmp_path), overwrite=True).register_images(
+        "SDSS_g'", fallback_smoothing_sigma=2.)
+    aligned = CCDData.read(target)
+    yy, xx = np.mgrid[:128, :128]
+    for x, y, _ in stars:
+        aperture = (xx - x)**2 + (yy - y)**2 <= 6**2
+        flux = np.sum((aligned.data - 100.)[aperture])
+        assert flux / np.sum((data - 100.)[aperture]) == pytest.approx(1., abs=.03)
+        cx = np.sum(xx[aperture] * (aligned.data - 100.)[aperture]) / flux
+        cy = np.sum(yy[aperture] * (aligned.data - 100.)[aperture]) / flux
+        assert abs(cx - x) < .15 and abs(cy - y) < .15
+    np.testing.assert_array_equal(fits.getdata(reference), data)
+    assert fits.getheader(target)['REGSMTH'] == 2.
+
+
+def test_fallback_does_not_retry_processing_errors(tmp_path, monkeypatch):
+    a = image(tmp_path, 'a.fits')
+    b = image(tmp_path, 'b.fits')
+    before = {p: p.read_bytes() for p in (a, b)}
+
+    def fail(*args, **kwargs):
+        raise OSError('disk read failed')
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('processing errors must not trigger smooth matching')
+    monkeypatch.setattr(registration_module, 'register', fail)
+    monkeypatch.setattr(registration_module, 'find_transform', forbidden)
+    with pytest.raises(RuntimeError) as error:
+        Registration(collection(tmp_path), overwrite=True).register_images(
+            "SDSS_g'", fallback_smoothing_sigma=2.)
+    assert isinstance(error.value.__cause__, OSError)
+    assert all(p.read_bytes() == data for p, data in before.items())
+
+
+# Review regressions: recorded field mode must remain authoritative even when
+# the caller omits the fallback option on a later run.
+def _complete_smoothed_field(tmp_path, monkeypatch):
+    reference = image(tmp_path, 'a.fits')
+    target = image(tmp_path, 'b.fits', value=200.)
+
+    def ordinary_failure(*args, **kwargs):
+        raise registration_module.MaxIterError('force field fallback')
+
+    def smoothed(source, reference, *masks, **kwargs):
+        return source.data.copy(), np.zeros(source.shape, bool), None
+
+    monkeypatch.setattr(registration_module, 'register', ordinary_failure)
+    monkeypatch.setattr(Registration, '_align_with_cmask', staticmethod(smoothed))
+    Registration(collection(tmp_path), overwrite=True).register_images(
+        "SDSS_g'", fallback_smoothing_sigma=2.)
+    return reference, target
+
+
+def test_default_rerun_rejects_new_native_target_in_recorded_smoothed_field(tmp_path, monkeypatch):
+    reference, target = _complete_smoothed_field(tmp_path, monkeypatch)
+    added = image(tmp_path, 'c.fits', value=300.)
+    before = {p: p.read_bytes() for p in (reference, target, added)}
+
+    def ordinary(source, reference, **kwargs):
+        return source.data.copy(), np.zeros(source.shape, bool)
+
+    monkeypatch.setattr(registration_module, 'register', ordinary)
+    with pytest.raises(ValueError, match='REGSMTH'):
+        Registration(collection(tmp_path), overwrite=True).register_images("SDSS_g'")
+    assert all(p.read_bytes() == value for p, value in before.items())
+
+
+def test_single_light_fallback_repeat_is_read_only_with_overwrite_false(tmp_path, fake_register):
+    reference = image(tmp_path, 'a.fits')
+    processor = Registration(collection(tmp_path), overwrite=True)
+    processor.register_images("SDSS_g'", fallback_smoothing_sigma=2.)
+    before = reference.read_bytes()
+    processor.register_images("SDSS_g'", fallback_smoothing_sigma=2., overwrite=False)
+    assert reference.read_bytes() == before
+    assert not fake_register
+
+
+@pytest.mark.parametrize('fallback', [None, 2.])
+def test_cleared_align_with_registration_provenance_cannot_resample_again(tmp_path, monkeypatch, fallback):
+    reference, target = _complete_smoothed_field(tmp_path, monkeypatch)
+    with fits.open(target, mode='update') as hdul:
+        del hdul[0].header['ALIGN']
+    before = {p: p.read_bytes() for p in (reference, target)}
+    with pytest.raises(ValueError, match='registration markers'):
+        Registration(collection(tmp_path), overwrite=True).register_images(
+            "SDSS_g'", fallback_smoothing_sigma=fallback)
+    assert all(p.read_bytes() == value for p, value in before.items())
+
+
+@pytest.mark.parametrize('fallback', [None, 2.])
+@pytest.mark.parametrize('overwrite', [False, True])
+def test_reference_only_selection_preserves_recorded_smoothed_mode(tmp_path, monkeypatch, fallback, overwrite):
+    reference, _ = _complete_smoothed_field(tmp_path, monkeypatch)
+    before = reference.read_bytes()
+    selected = ImageFileCollection(tmp_path, filenames=[reference.name], keywords='*')
+    Registration(selected, overwrite=overwrite).register_images(
+        "SDSS_g'", fallback_smoothing_sigma=fallback)
+    assert reference.read_bytes() == before
+    assert fits.getheader(reference)['REGSMTH'] == 2.
+
+
+def test_default_complete_recorded_field_is_reused_without_fitting(tmp_path, monkeypatch):
+    reference, target = _complete_smoothed_field(tmp_path, monkeypatch)
+    before = {p: p.read_bytes() for p in (reference, target)}
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('a complete field must not be fitted again')
+    monkeypatch.setattr(registration_module, 'register', forbidden)
+    monkeypatch.setattr(Registration, '_align_with_cmask', staticmethod(forbidden))
+    Registration(collection(tmp_path)).register_images("SDSS_g'")
+    assert all(p.read_bytes() == value for p, value in before.items())
+
+
+@pytest.mark.parametrize('mode', [None, 0., -1., 'unknown', True])
+@pytest.mark.parametrize('fallback', [None, 2.])
+def test_mixed_or_invalid_recorded_modes_fail_on_every_entry_path(tmp_path, monkeypatch, mode, fallback):
+    reference, target = _complete_smoothed_field(tmp_path, monkeypatch)
+    with fits.open(target, mode='update') as hdul:
+        if mode is None:
+            del hdul[0].header['REGSMTH']
+        else:
+            hdul[0].header['REGSMTH'] = mode
+    before = {p: p.read_bytes() for p in (reference, target)}
+    with pytest.raises(ValueError, match='REGSMTH'):
+        Registration(collection(tmp_path), overwrite=True).register_images(
+            "SDSS_g'", fallback_smoothing_sigma=fallback)
+    assert all(p.read_bytes() == value for p, value in before.items())
+
+
+def test_changing_recorded_smoothing_sigma_requires_native_copies(tmp_path, monkeypatch):
+    reference, target = _complete_smoothed_field(tmp_path, monkeypatch)
+    before = {p: p.read_bytes() for p in (reference, target)}
+    with pytest.raises(ValueError, match='REGSMTH'):
+        Registration(collection(tmp_path), overwrite=True).register_images(
+            "SDSS_g'", fallback_smoothing_sigma=3.)
+    assert all(p.read_bytes() == value for p, value in before.items())
+
+
+def test_legacy_complete_field_can_default_reuse_but_not_opt_into_fallback(tmp_path, fake_register):
+    reference = image(tmp_path, 'a.fits')
+    target = image(tmp_path, 'b.fits')
+    Registration(collection(tmp_path), overwrite=True).register_images("SDSS_g'")
+    before = {p: p.read_bytes() for p in (reference, target)}
+    fake_register.clear()
+    Registration(collection(tmp_path)).register_images("SDSS_g'")
+    assert not fake_register
+    with pytest.raises(ValueError, match='REGSMTH'):
+        Registration(collection(tmp_path), overwrite=True).register_images(
+            "SDSS_g'", fallback_smoothing_sigma=2.)
+    assert all(p.read_bytes() == value for p, value in before.items())
+
+
+@pytest.mark.parametrize('marker,value', [('REGSMTH', 2.), ('REGSIG', 3),
+                                          ('REGREF', 'a.fits'), ('REFHASH', 'some-grid')])
+@pytest.mark.parametrize('align', [None, ''])
+def test_any_orphan_registration_marker_is_rejected(tmp_path, fake_register, marker, value, align):
+    reference = image(tmp_path, 'a.fits')
+    target = image(tmp_path, 'b.fits', **{marker: value})
+    if align is not None:
+        with fits.open(target, mode='update') as hdul:
+            hdul[0].header['ALIGN'] = align
+    before = {p: p.read_bytes() for p in (reference, target)}
+    with pytest.raises(ValueError, match='registration markers'):
+        Registration(collection(tmp_path), overwrite=True).register_images("SDSS_g'")
+    assert not fake_register
+    assert all(p.read_bytes() == data for p, data in before.items())
+
+
+def test_partial_publication_has_context_and_default_retry_is_blocked(tmp_path, monkeypatch):
+    reference = image(tmp_path, 'a.fits')
+    first = image(tmp_path, 'b.fits', value=200.)
+    last = image(tmp_path, 'c.fits', value=300.)
+
+    def fail(*args, **kwargs):
+        raise registration_module.MaxIterError('force smooth mode')
+
+    def smooth(source, reference, *masks, **kwargs):
+        return source.data.copy(), np.zeros(source.shape, bool), None
+    monkeypatch.setattr(registration_module, 'register', fail)
+    monkeypatch.setattr(Registration, '_align_with_cmask', staticmethod(smooth))
+    original_update = registration_module.update_fits_header
+
+    def publish(path, cards, **kwargs):
+        if not cards and kwargs.get('output_path') == last:
+            raise OSError('simulated publication failure')
+        return original_update(path, cards, **kwargs)
+    monkeypatch.setattr(registration_module, 'update_fits_header', publish)
+    last_before = last.read_bytes()
+    with pytest.raises(OSError, match='FIELD=field_a: publication failed.*after 2/3'):
+        Registration(collection(tmp_path), overwrite=True).register_images(
+            "SDSS_g'", fallback_smoothing_sigma=2.)
+    assert fits.getheader(reference)['REGSMTH'] == 2.
+    assert fits.getheader(first)['REGSMTH'] == 2.
+    assert last.read_bytes() == last_before
+    before_retry = {p: p.read_bytes() for p in (reference, first, last)}
+    with pytest.raises(ValueError, match='REGSMTH'):
+        Registration(collection(tmp_path), overwrite=True).register_images("SDSS_g'")
+    assert all(p.read_bytes() == value for p, value in before_retry.items())
+
+
+def test_field_mode_selection_is_independent_between_fields(tmp_path, monkeypatch):
+    a = image(tmp_path, 'a.fits')
+    b = image(tmp_path, 'b.fits', value=200.)
+    c = image(tmp_path, 'c.fits', field='field_b', value=300.)
+    d = image(tmp_path, 'd.fits', field='field_b', value=400.)
+    smooth_inputs = []
+
+    def ordinary(source, reference, **kwargs):
+        if source.header['FIELD'] == 'field_b':
+            raise registration_module.MaxIterError('field b needs smoothing')
+        return source.data.copy(), np.zeros(source.shape, bool)
+
+    def smoothed(source, reference, *masks, **kwargs):
+        smooth_inputs.append(source.header['FIELD'])
+        return source.data.copy(), np.zeros(source.shape, bool), None
+    monkeypatch.setattr(registration_module, 'register', ordinary)
+    monkeypatch.setattr(Registration, '_align_with_cmask', staticmethod(smoothed))
+    Registration(collection(tmp_path), overwrite=True).register_images(
+        "SDSS_g'", fallback_smoothing_sigma=2.)
+    assert [fits.getheader(p)['REGSMTH'] for p in (a, b, c, d)] == [0., 0., 2., 2.]
+    assert smooth_inputs == ['field_b']
+
+
+def test_exhausted_smoothing_error_reports_phase_width_and_thresholds(tmp_path, monkeypatch):
+    reference = image(tmp_path, 'a.fits')
+    target = image(tmp_path, 'b.fits')
+    before = {p: p.read_bytes() for p in (reference, target)}
+
+    def fail(*args, **kwargs):
+        raise registration_module.MaxIterError('no triangles')
+    monkeypatch.setattr(registration_module, 'register', fail)
+    monkeypatch.setattr(registration_module, 'find_transform', fail)
+    with pytest.raises(RuntimeError, match=r'FIELD=field_a.*phases_attempted=ordinary \+ smoothed.*smoothing_sigma=2.0') as error:
+        Registration(collection(tmp_path), overwrite=True).register_images(
+            "SDSS_g'", detection_sigmas=[3, 4], fallback_smoothing_sigma=2.)
+    assert 'detection_sigmas=[3, 4]' in str(error.value)
+    assert 'No results published' in str(error.value)
+    assert isinstance(error.value.__cause__, registration_module.MaxIterError)
+    assert all(p.read_bytes() == value for p, value in before.items())
+
+
+@pytest.mark.parametrize('overwrite', [False, True])
+def test_real_fallback_separate_output_matches_single_apply_with_wcs_and_masks(tmp_path, monkeypatch, overwrite):
+    """Independent pixel-level oracle through staging AND final FITS publication."""
+    from astroalign import find_transform as actual_find, apply_transform as actual_apply
+    from scipy.ndimage import gaussian_filter
+    from skimage.transform import warp
+
+    native = tmp_path / 'native'
+    output = tmp_path / 'registered'
+    data, _ = synthetic_star_field()
+    validity = np.zeros(data.shape, bool)
+    validity[120, 120] = True
+    reference = image(native, 'a.fits', value=data, mask=validity)
+    moved = shift(data, (2.4, -3.1), order=3, mode='constant', cval=100.)
+    target = image(native, 'b.fits', value=moved, band="SDSS_r'", mask=validity)
+    cmask = np.zeros(data.shape, np.uint8)
+    cmask[60, 60] = 1
+    wcs = WCS(naxis=2)
+    wcs.wcs.crpix = [64., 64.]
+    wcs.wcs.crval = [163., -5.]
+    wcs.wcs.cdelt = [-.0001, .0001]
+    wcs.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    for path in (reference, target):
+        with fits.open(path, mode='update') as hdul:
+            hdul[0].header.update(wcs.to_header())
+            hdul.append(fits.ImageHDU(cmask, name='CMASK'))
+    originals = {p: p.read_bytes() for p in (reference, target)}
+    src = Registration._read_ccd(target)
+    ref = Registration._read_ccd(reference)
+
+    def detection(ccd):
+        result = ccd.copy()
+        invalid = ccd.mask | cmask.astype(bool)
+        weights = gaussian_filter((~invalid).astype(float), 2.)
+        result.data = gaussian_filter(np.where(invalid, 0., ccd.data), 2.) / weights
+        result.mask = invalid
+        return result
+
+    transform, _ = actual_find(detection(src), detection(ref), min_area=5, detection_sigma=3)
+    expected, footprint = actual_apply(transform, src, ref, propagate_mask=True)
+    expected_cmask = warp(cmask, inverse_map=transform.inverse, output_shape=ref.shape,
+                          order=0, mode='constant', cval=0, preserve_range=True).astype(bool)
+    calls = []
+
+    def matching(source, destination, **kwargs):
+        calls.append(kwargs['detection_sigma'])
+        if np.array_equal(source.data, src.data):
+            raise registration_module.MaxIterError('force ordinary-mode exhaustion')
+        return actual_find(source, destination, **kwargs)
+    monkeypatch.setattr(registration_module, 'find_transform', matching)
+    registration = Registration(collection(native), overwrite=overwrite)
+    registration.register_images(
+        "SDSS_g'", detection_sigmas=[3, 4], fallback_smoothing_sigma=2.,
+        save_location=output, discard_input_wcs=True)
+    assert calls == [3, 4, 3]
+    assert all(p.read_bytes() == value for p, value in originals.items())
+    np.testing.assert_allclose(fits.getdata(output / target.name), expected, rtol=1e-12, atol=1e-10)
+    np.testing.assert_array_equal(fits.getdata(output / target.name, 'MASK').astype(bool),
+                                  footprint | ~np.isfinite(expected))
+    np.testing.assert_array_equal(fits.getdata(output / target.name, 'CMASK').astype(bool), expected_cmask)
+    np.testing.assert_array_equal(fits.getdata(output / reference.name), data)
+    np.testing.assert_array_equal(fits.getdata(output / reference.name, 'MASK').astype(bool), validity)
+    np.testing.assert_array_equal(fits.getdata(output / reference.name, 'CMASK'), cmask)
+    assert has_wcs(output / reference.name) and not has_wcs(output / target.name)
+    assert all(fits.getheader(output / p.name)['REGSMTH'] == 2. for p in (reference, target))
+    count = len(calls)
+    # Reusing native inputs + the same output folder is an overwrite decision,
+    # not implicit reuse of destination pixels.
+    with pytest.raises(FileExistsError):
+        Registration(collection(native)).register_images(
+            "SDSS_g'", save_location=output, fallback_smoothing_sigma=2., discard_input_wcs=True)
+    assert len(calls) == count
+    # A successful processor now selects its returned output collection. To
+    # intentionally recompute native pixels, construct from the native inputs.
+    Registration(collection(native)).register_images(
+        "SDSS_g'", detection_sigmas=[3, 4], fallback_smoothing_sigma=2.,
+        save_location=output, overwrite=True, discard_input_wcs=True)
+    assert calls == [3, 4, 3, 3, 4, 3]
+    assert all(p.read_bytes() == value for p, value in originals.items())
+    np.testing.assert_allclose(fits.getdata(output / target.name), expected, rtol=1e-12, atol=1e-10)
+
+
+def test_failed_separate_publication_can_recover_from_unchanged_native_inputs(tmp_path, monkeypatch):
+    native = tmp_path / 'native'
+    output = tmp_path / 'registered'
+    reference = image(native, 'a.fits')
+    target = image(native, 'b.fits', value=200.)
+    original = {p: p.read_bytes() for p in (reference, target)}
+
+    def fail(*args, **kwargs):
+        raise registration_module.MaxIterError('force smooth mode')
+
+    def smooth(source, reference, *masks, **kwargs):
+        return source.data.copy(), np.zeros(source.shape, bool), None
+    monkeypatch.setattr(registration_module, 'register', fail)
+    monkeypatch.setattr(Registration, '_align_with_cmask', staticmethod(smooth))
+    update = registration_module.update_fits_header
+
+    def publish(path, cards, **kwargs):
+        if not cards and kwargs.get('output_path') == output / target.name:
+            raise OSError('simulated output disk error')
+        return update(path, cards, **kwargs)
+    monkeypatch.setattr(registration_module, 'update_fits_header', publish)
+    with pytest.raises(OSError, match='publication failed'):
+        Registration(collection(native)).register_images(
+            "SDSS_g'", fallback_smoothing_sigma=2., save_location=output)
+    assert (output / reference.name).exists() and not (output / target.name).exists()
+    assert all(p.read_bytes() == value for p, value in original.items())
+    monkeypatch.setattr(registration_module, 'update_fits_header', update)
+    Registration(collection(native), overwrite=True).register_images(
+        "SDSS_g'", fallback_smoothing_sigma=2., save_location=output)
+    assert all(p.read_bytes() == value for p, value in original.items())
+    assert fits.getheader(output / target.name)['REGSMTH'] == 2.
